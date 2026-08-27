@@ -83,9 +83,10 @@ bool Decoder::ProcessPacket(const uint8_t *pkt) {
 
 // The 0x61 broadcast's first 13 int16 values are byte-identical to
 // registers 0x3A..0x46 read back via 0x71, so it goes through the same
-// register dispatch. The final two values (a constant zero and a
-// slowly drifting counter) are not documented measurement registers and
-// are ignored.
+// register dispatch. Value 13 (a constant zero) is ignored. Value 14
+// has no documented register address, but is a candidate for the app's
+// "Power Percent(%)" field, so it is decoded into device.power_raw (see
+// its doc comment for why it is raw, not a percentage).
 bool Decoder::DecodeOutput(const uint8_t *pkt) {
   const uint8_t *values = pkt + 2;
   const size_t count = (kOutputPacketLen - 2) / 2;
@@ -99,6 +100,10 @@ bool Decoder::DecodeOutput(const uint8_t *pkt) {
     if (ApplyRegister(reg, SignInt16LE(values[i * 2], values[i * 2 + 1]))) {
       updated = true;
     }
+  }
+  if (kOutputPacketLen - 2 >= 30) {
+    current_.device.power_raw = SignInt16LE(values[28], values[29]);
+    updated = true;
   }
   return updated;
 }

@@ -22,6 +22,15 @@ type DeviceInfo struct {
 	// it reads between the machine surface and the surrounding air,
 	// dominated by conduction through the mount, and it lags.
 	Temperature float64 `json:"temperature"`
+
+	// PowerRaw is value 14 (bytes 30-31) of the 0x61 broadcast: a
+	// slowly-drifting counter with no documented register address. The
+	// WitMotion app shows a "Power Percent(%)" field this may feed, but
+	// that is UNCONFIRMED — observed values (e.g. 418) are well outside
+	// 0-100, so this is exposed raw rather than as a percentage. Track
+	// it across a real charge/discharge cycle to find the mapping. See
+	// docs/protocol.md §5/§8.
+	PowerRaw float64 `json:"power_raw"`
 }
 
 // SensorReading is the normalized, decoded output of a WTVB01-BT50

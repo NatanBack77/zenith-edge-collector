@@ -98,9 +98,10 @@ func (d *Decoder) processPacket(pkt []byte) bool {
 //
 // Capture shows its first 13 int16 values are byte-identical to
 // registers 0x3A..0x46 read back via 0x71, so it is decoded through the
-// same register dispatch. The final two values (a constant zero and a
-// slowly drifting counter) are not part of any documented measurement
-// register and are ignored.
+// same register dispatch. Value 13 (a constant zero) is ignored. Value
+// 14 has no documented register address, but is a candidate for the
+// app's "Power Percent(%)" field, so it is decoded into Device.PowerRaw
+// (see the field's doc comment for why it is raw, not a percentage).
 func (d *Decoder) decodeOutput(pkt []byte) bool {
 	values := pkt[2:]
 	updated := false
@@ -112,6 +113,10 @@ func (d *Decoder) decodeOutput(pkt []byte) bool {
 		if d.applyRegister(reg, signInt16LE(values[i*2], values[i*2+1])) {
 			updated = true
 		}
+	}
+	if len(values) >= 30 {
+		d.current.Device.PowerRaw = signInt16LE(values[28], values[29])
+		updated = true
 	}
 	return updated
 }

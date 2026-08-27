@@ -54,6 +54,14 @@ struct DeviceInfo {
   // (register 0x40, "Product temperature"). Not the machine's
   // temperature, and not a calibrated ambient probe.
   float temperature = 0;
+
+  // power_raw is value 14 of the 0x61 broadcast: a slowly-drifting
+  // counter with no documented register address. The WitMotion app
+  // shows a "Power Percent(%)" field this may feed, but that is
+  // UNCONFIRMED — observed values (e.g. 418) are well outside 0-100,
+  // so it is exposed raw rather than as a percentage. See
+  // docs/protocol.md.
+  float power_raw = 0;
 };
 
 struct SensorReading {

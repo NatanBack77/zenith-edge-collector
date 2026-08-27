@@ -210,6 +210,7 @@ void PublishReading(const wtvb01::SensorReading &r) {
   // Module temperature, not the machine's. See docs/indicators.md.
   JsonObject device = doc["device"].to<JsonObject>();
   device["temperature"] = r.device.temperature;
+  device["power_raw"] = r.device.power_raw;
   device["rssi"] = ble_client != nullptr ? ble_client->getRssi() : 0;
 
   char payload[512];
@@ -274,9 +275,9 @@ void loop() {
 
   Serial.printf(
       "vel(%.1f,%.1f,%.1f)mm/s disp(%.0f,%.0f,%.0f)um "
-      "freq(%.0f,%.0f,%.0f)Hz temp=%.1fC\n",
+      "freq(%.0f,%.0f,%.0f)Hz temp=%.1fC power_raw=%.0f\n",
       reading.velocity.x, reading.velocity.y, reading.velocity.z,
       reading.displacement.x, reading.displacement.y, reading.displacement.z,
       reading.frequency.x, reading.frequency.y, reading.frequency.z,
-      reading.device.temperature);
+      reading.device.temperature, reading.device.power_raw);
 }

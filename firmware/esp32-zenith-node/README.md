@@ -54,7 +54,7 @@ Tópico: `zenith/readings/<mac-do-sensor>`
   "displacement": { "x": 21.0,  "y": 9.0,   "z": 6.0 },
   "angle":        { "x": 0.088, "y": 0.005, "z": 0.033 },
   "frequency":    { "x": 11.0,  "y": 12.0,  "z": 16.0 },
-  "device":       { "temperature": 24.9, "rssi": -49 }
+  "device":       { "temperature": 24.9, "power_raw": 418, "rssi": -49 }
 }
 ```
 
@@ -64,6 +64,14 @@ Go, então os dois são intercambiáveis a jusante.
 
 `device.temperature` é a temperatura do **módulo sensor**, não da máquina.
 Veja [`docs/indicators.md`](../../docs/indicators.md).
+
+`device.power_raw` é um candidato a indicar a carga da bateria do
+sensor — o app oficial da WitMotion mostra um campo "Power Percent(%)"
+que esse contador pode alimentar, mas a conversão para porcentagem
+**não está confirmada** (valores observados em repouso, como 418, ficam
+bem fora de 0–100). É publicado cru de propósito; acompanhe a tendência
+ao longo de um ciclo de carga/descarga real para calibrar. Veja
+[`docs/protocol.md`](../../docs/protocol.md) §5 e §8.
 
 O nó também publica um valor retido `online`/`offline` em
 `zenith/status`, com `offline` configurado como last will do MQTT, para

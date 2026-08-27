@@ -136,7 +136,7 @@ para detectar deriva; não substitui uma sonda no mancal.
 | 7-9 | 16-21 | Displacement X, Y, Z (`0x41`-`0x43`) |
 | 10-12 | 22-27 | Frequency X, Y, Z (`0x44`-`0x46`) |
 | 13 | 28-29 | Constante `0x0000` em todas as capturas; não decodificado |
-| 14 | 30-31 | Contador com deriva lenta; não é registrador de medição documentado. O app oficial mostra um campo "Power Percent(%)", que este valor pode alimentar — não confirmado, então não decodificado |
+| 14 | 30-31 | Contador com deriva lenta; não é registrador de medição documentado. O app oficial mostra um campo "Power Percent(%)", que este valor pode alimentar — decodificado como `device.power_raw`, cru, **não** como porcentagem (veja §8) |
 
 Isso bate com a ordem declarada no manual: *"vibration velocity XYZ,
 vibration angle XYZ, temperature, vibration displacement XYZ, vibration
@@ -198,9 +198,12 @@ Todos são enviados para a characteristic de escrita `ffe9`.
   houve comparação lado a lado com o app oficial da WitMotion sob
   vibração real. Se alguma escala estiver errada, é mudança de uma linha
   em `internal/protocol/wtvb01/registers.go`.
-- **Valor 14 do pacote `0x61`** (o contador com deriva). Provavelmente a
-  porcentagem de bateria mostrada no app, mas não verificado, então não
-  decodificado.
+- **Valor 14 do pacote `0x61`** (o contador com deriva). Provavelmente
+  alimenta a porcentagem de bateria mostrada no app, mas não verificado:
+  os valores observados (ex. 418) ficam bem fora de 0–100, então é
+  exposto cru em `device.power_raw`, sem tentar converter para
+  porcentagem. Acompanhe esse número ao longo de um ciclo real de
+  carga/descarga para achar a conversão certa.
 
 Temperatura, tamanhos de pacote, endereços de registrador, framing, UUIDs
 e a codificação dos comandos estão todos confirmados.
