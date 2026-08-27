@@ -1,47 +1,48 @@
-# WTVB01-BT50 BLE Protocol
+# Protocolo BLE do WTVB01-BT50
 
-Two sources back this document, and every claim below says which one it
-comes from:
+Duas fontes sustentam este documento, e toda afirmação abaixo diz de qual
+delas vem:
 
-1. **The official Python SDK.** `Python/BWT901BLE5.0_python_sdk` from
+1. **O SDK Python oficial.** `Python/BWT901BLE5.0_python_sdk` do
    [WITMOTION/WitBluetooth_BWT901BLE5_0](https://github.com/WITMOTION/WitBluetooth_BWT901BLE5_0)
-   (commit `9efaab0`), files `device_model.py` and `test.py`. This is the
-   only SDK code in that repository. There is no `Wtvb01Processor`, no
-   `Wtvb01Resolver`, and no `Wit.Example_WTVB01BT50` project.
-2. **Bytes captured from a physical WTVB01-BT50** (MAC
-   `E6:6B:9A:CC:88:25`), stored in
+   (commit `9efaab0`), arquivos `device_model.py` e `test.py`. Este é o
+   único código de SDK que existe naquele repositório. Não existe
+   `Wtvb01Processor`, nem `Wtvb01Resolver`, nem projeto
+   `Wit.Example_WTVB01BT50`.
+2. **Bytes capturados de um WTVB01-BT50 físico** (MAC
+   `E6:6B:9A:CC:88:25`), guardados em
    `internal/protocol/wtvb01/testdata/capture-wtvb01-bt50.hex`.
 
-The SDK is generic across the WT sensor family and does **not** decode
-the WTVB01's vibration fields, so the capture is what settles the packet
-layout. Where the two disagree, the capture wins and this is called out.
+O SDK é genérico para a família WT e **não** decodifica os campos de
+vibração do WTVB01, então é a captura que define o layout do pacote.
+Onde os dois discordam, a captura vence e isso está sinalizado.
 
-## 1. Device discovery and connection lifecycle
+## 1. Descoberta e ciclo de vida da conexão
 
-From `test.py` and `device_model.py`; `internal/ble` mirrors it:
+De `test.py` e `device_model.py`; o pacote `internal/ble` espelha isso:
 
-1. **Scan** — `BleakScanner.discover(timeout=20.0)`, keeping devices whose
-   name contains `"WT"` (`test.py:22`). Our scanner also matches on the
-   advertised service UUID, because a BLE device may advertise no local
-   name at all.
+1. **Scan** — `BleakScanner.discover(timeout=20.0)`, mantendo dispositivos
+   cujo nome contenha `"WT"` (`test.py:22`). Nosso scanner também casa
+   pelo UUID de serviço anunciado, porque um dispositivo BLE pode não
+   anunciar nome nenhum.
 2. **Connect** — `BleakClient(BLEDevice, timeout=15)` (`device_model.py:62`).
-3. **Resolve characteristics** — iterate `client.services`, match the
-   fixed UUIDs below (`device_model.py:71-82`).
+3. **Resolver characteristics** — itera `client.services` e casa os UUIDs
+   fixos listados abaixo (`device_model.py:71-82`).
 4. **Subscribe** — `client.start_notify(notify_uuid, onDataReceived)`
    (`device_model.py:93`).
-5. **Poll registers** — after a 3 s settle, a background task issues
-   register reads 100 ms apart (`device_model.py:88, 112-117`). For the
-   WTVB01 this is optional: its `0x61` broadcast already carries every
-   measurement register.
-6. **Accumulate** — `deviceData` is a dict updated per packet, with a
-   callback fired on each update (`device_model.py:39-56, 156`). Our
-   `Decoder` keeps the same accumulate-then-emit behaviour with a typed
-   struct.
-7. **Close** — clear `isOpen`, then `stop_notify` (`device_model.py:96-103`).
+5. **Polling de registrador** — após 3 s de acomodação, uma task em
+   background dispara leituras de registrador a cada 100 ms
+   (`device_model.py:88, 112-117`). Para o WTVB01 isso é **opcional**: o
+   broadcast `0x61` já carrega todos os registradores de medição.
+6. **Acumular** — `deviceData` é um dict atualizado a cada pacote, com um
+   callback disparado a cada atualização (`device_model.py:39-56, 156`).
+   Nosso `Decoder` mantém o mesmo comportamento de acumular e emitir, mas
+   com struct tipada.
+7. **Fechar** — limpa `isOpen`, depois `stop_notify` (`device_model.py:96-103`).
 
-## 2. BLE UUIDs
+## 2. UUIDs BLE
 
-From `device_model.py:66-68`, verbatim:
+De `device_model.py:66-68`, literal:
 
 ```python
 target_service_uuid              = "0000ffe5-0000-1000-8000-00805f9a34fb"
@@ -49,12 +50,12 @@ target_characteristic_uuid_read  = "0000ffe4-0000-1000-8000-00805f9a34fb"  # not
 target_characteristic_uuid_write = "0000ffe9-0000-1000-8000-00805f9a34fb"  # write
 ```
 
-Confirmed against hardware: the physical sensor advertises service
-`ffe5` and both characteristics resolve.
+Confirmado no hardware: o sensor físico anuncia o serviço `ffe5` e as
+duas characteristics resolvem.
 
 ## 3. Framing
 
-From `device_model.py:121-133`:
+De `device_model.py:121-133`:
 
 ```python
 for var in tempdata:
@@ -67,140 +68,139 @@ for var in tempdata:
         self.processData(self.TempBytes); self.TempBytes.clear()
 ```
 
-Rules: byte 0 is `0x55`; byte 1 is the type, `0x61` or `0x71`; anything
-else resyncs.
+Regras: byte 0 é `0x55`; byte 1 é o tipo, `0x61` ou `0x71`; qualquer
+outra coisa ressincroniza.
 
-### ⚠️ Packet length: the SDK is wrong for this sensor
+### ⚠️ Tamanho do pacote: o SDK está errado para este sensor
 
-The SDK hardcodes **20 bytes for both types**. Measured against 3772
-captured bytes:
+O SDK fixa **20 bytes para os dois tipos**. Medido sobre 3772 bytes
+capturados:
 
-| Type | SDK assumes | Actual (WTVB01-BT50) | Packets measured |
+| Tipo | SDK assume | Real (WTVB01-BT50) | Pacotes medidos |
 |---|---|---|---|
 | `0x61` broadcast | 20 | **32** | 110 |
-| `0x71` register read-back | 20 | **20** | 11 |
+| `0x71` leitura de registrador | 20 | **20** | 11 |
 
-Decoding a `0x61` as 20 bytes silently misreads every field — it
-happens to yield plausible-looking numbers, which is exactly why this
-was caught only by comparing against register read-backs. The decoder
-therefore selects length by type (`packetLenFor`).
+Decodificar um `0x61` como 20 bytes lê errado **todos** os campos — e
+produz números de aparência plausível, que foi exatamente por que isso só
+foi pego comparando contra as leituras de registrador. Por isso o decoder
+escolhe o tamanho pelo tipo (`packetLenFor`).
 
-The `0x71` layout matches both the SDK and the official manual:
-`0x55 0x71 <start reg, 2 bytes LE> <16 bytes = 8 registers, LE>`.
+O layout do `0x71` bate com o SDK e com o manual oficial:
+`0x55 0x71 <registrador inicial, 2 bytes LE> <16 bytes = 8 registradores, LE>`.
 
-## 4. Register map
+## 4. Mapa de registradores
 
-Addresses confirmed by the official manual and by capture; see §6 for
-the cross-check.
+Endereços confirmados pelo manual oficial e pela captura; veja §6 para a
+verificação cruzada.
 
-| Register | Field | Scale | Unit |
+| Registrador | Campo | Escala | Unidade |
 |---|---|---|---|
-| `0x3A` `0x3B` `0x3C` | Vibration velocity X/Y/Z | raw | mm/s |
-| `0x3D` `0x3E` `0x3F` | Angular vibration amplitude X/Y/Z | `raw / 32768 * 180` | degrees |
-| `0x40` | Temperature | `raw / 100` | °C |
-| `0x41` `0x42` `0x43` | Vibration displacement X/Y/Z | raw | µm |
-| `0x44` `0x45` `0x46` | Vibration frequency X/Y/Z | raw | Hz |
+| `0x3A` `0x3B` `0x3C` | Velocidade de vibração X/Y/Z | cru | mm/s |
+| `0x3D` `0x3E` `0x3F` | Amplitude angular de vibração X/Y/Z | `cru / 32768 * 180` | graus |
+| `0x40` | Temperatura | `cru / 100` | °C |
+| `0x41` `0x42` `0x43` | Deslocamento de vibração X/Y/Z | cru | µm |
+| `0x44` `0x45` `0x46` | Frequência de vibração X/Y/Z | cru | Hz |
 
-All values are signed int16, little-endian. `getSignInt16`
-(`device_model.py:180-184`) subtracts 2^16 when the raw value is ≥ 2^15,
-which is plain two's-complement int16.
+Todos os valores são int16 com sinal, little-endian. O `getSignInt16`
+(`device_model.py:180-184`) subtrai 2^16 quando o valor cru é ≥ 2^15, o
+que é complemento de dois padrão.
 
-Documented ranges (manual): velocity 0–100 mm/s, displacement
-0–30000 µm, frequency 1–100 Hz, temperature −40 to +85 °C.
+Faixas documentadas (manual): velocidade 0–100 mm/s, deslocamento
+0–30000 µm, frequência 1–100 Hz, temperatura −40 a +85 °C.
 
-### Temperature is the module's own temperature
+### Temperature é a temperatura do próprio módulo
 
-The manual's register table names `0x40` **"Product temperature"** — the
-temperature of the sensor module itself, not of the machine it is
-mounted on and not a calibrated ambient probe. It is modelled as
-`device.temperature` and must never be called `bearing_temperature` or
-`motor_temperature`.
+A tabela de registradores do manual chama `0x40` de **"Product
+temperature"** — a temperatura do módulo sensor em si, não da máquina em
+que ele está montado e não uma sonda de ambiente calibrada. É modelada
+como `device.temperature` e nunca deve ser chamada de
+`bearing_temperature` ou `motor_temperature`.
 
-Observed on hardware: the sensor resting on a desk reported 24.4–25.1 °C
-against a room at roughly the same temperature, which is expected — with
-no heat source, the module equilibrates with the air around it. Mounted
-on a hot machine it reads somewhere between the machine and the ambient
-air, dominated by conduction through the mount, and it lags. Useful as a
-sanity signal and for drift detection; not a substitute for a probe on
-the bearing.
+Observado no hardware: o sensor parado na mesa reportou 24,4–25,1 °C numa
+sala mais ou menos nessa temperatura, o que é esperado — sem fonte de
+calor o módulo entra em equilíbrio com o ar em volta. Montado numa
+máquina quente ele lê algo entre a máquina e o ar ambiente, dominado pela
+condução através da fixação, e com atraso. Útil como sinal de sanidade e
+para detectar deriva; não substitui uma sonda no mancal.
 
-## 5. The `0x61` broadcast packet
+## 5. O pacote broadcast `0x61`
 
-32 bytes: 2 header bytes followed by 15 signed int16 values.
+32 bytes: 2 bytes de cabeçalho seguidos de 15 int16 com sinal.
 
-| Value index | Bytes | Meaning |
+| Índice do valor | Bytes | Significado |
 |---|---|---|
-| 0-2 | 2-7 | Velocity X, Y, Z (registers `0x3A`-`0x3C`) |
-| 3-5 | 8-13 | Angular amplitude X, Y, Z (`0x3D`-`0x3F`) |
+| 0-2 | 2-7 | Velocity X, Y, Z (registradores `0x3A`-`0x3C`) |
+| 3-5 | 8-13 | Amplitude angular X, Y, Z (`0x3D`-`0x3F`) |
 | 6 | 14-15 | Temperature (`0x40`) |
 | 7-9 | 16-21 | Displacement X, Y, Z (`0x41`-`0x43`) |
 | 10-12 | 22-27 | Frequency X, Y, Z (`0x44`-`0x46`) |
-| 13 | 28-29 | Constant `0x0000` in all captures; not decoded |
-| 14 | 30-31 | Slowly drifting counter; not a documented measurement register. The official app shows a "Power Percent(%)" field, which this may back — unconfirmed, so not decoded |
+| 13 | 28-29 | Constante `0x0000` em todas as capturas; não decodificado |
+| 14 | 30-31 | Contador com deriva lenta; não é registrador de medição documentado. O app oficial mostra um campo "Power Percent(%)", que este valor pode alimentar — não confirmado, então não decodificado |
 
-This matches the manual's stated order: *"vibration velocity XYZ,
+Isso bate com a ordem declarada no manual: *"vibration velocity XYZ,
 vibration angle XYZ, temperature, vibration displacement XYZ, vibration
-frequency XYZ, with the low byte first and the high byte last."* The
-manual describes this packet as 28 bytes (header plus the 13 measurement
-values); the sensor actually sends 32, with the two trailing values
-above.
+frequency XYZ, with the low byte first and the high byte last."* O manual
+descreve esse pacote como 28 bytes (cabeçalho mais os 13 valores de
+medição); o sensor de fato envia 32, com os dois valores extras acima.
 
-## 6. How the layout was verified
+## 6. Como o layout foi verificado
 
-The `0x61` broadcast and the `0x71` register read-backs are independent
-encodings of the same registers, so they can be checked against each
-other with no external reference. From the capture:
+O broadcast `0x61` e as leituras de registrador `0x71` são codificações
+**independentes dos mesmos registradores**, então podem ser conferidos um
+contra o outro sem nenhuma referência externa. Da captura:
 
 ```
-0x61 values:            [17, 7, 18, 233, 243, 57, 2455, 300, 19, 239, 9, 13, 10, 0, 418]
-0x71 block 0x3A regs:   [17, 7, 18, 233, 243, 57, 2436, 300]
-0x71 block 0x42 regs:   [19, 239, 9, 13, 10, -21, 27, -3]
+valores 0x61:            [17, 7, 18, 233, 243, 57, 2455, 300, 19, 239, 9, 13, 10, 0, 418]
+registradores 0x71 0x3A: [17, 7, 18, 233, 243, 57, 2436, 300]
+registradores 0x71 0x42: [19, 239, 9, 13, 10, -21, 27, -3]
 ```
 
-Values 0-7 of the broadcast are byte-identical to registers
-`0x3A`-`0x41`, and values 8-12 to registers `0x42`-`0x46`. Temperature
-differs only because it is recomputed continuously (2455 vs 2436, i.e.
-24.55 vs 24.36 °C).
+Os valores 0-7 do broadcast são idênticos byte a byte aos registradores
+`0x3A`-`0x41`, e os valores 8-12 aos registradores `0x42`-`0x46`. A
+temperatura difere só porque é recalculada continuamente (2455 contra
+2436, ou seja 24,55 contra 24,36 °C).
 
-Because of this, the decoder routes both packet types through one
-register-address dispatch (`applyRegister`) rather than having two
-parallel field layouts. `TestOutputAndRegisterPacketsAgree` enforces the
-equivalence.
+Por causa disso, o decoder roteia os dois tipos de pacote por um único
+dispatch por endereço de registrador (`applyRegister`), em vez de manter
+dois layouts paralelos. O teste `TestOutputAndRegisterPacketsAgree`
+garante essa equivalência.
 
-Temperature is additionally confirmed absolutely: `0x40 / 100` gives
-24.36 °C, matching the room the capture was taken in.
+A temperatura ainda é confirmada em valor absoluto: `0x40 / 100` dá
+24,36 °C, batendo com a sala onde a captura foi feita.
 
-## 7. Command format
+## 7. Formato dos comandos
 
-From `device_model.py:214-246`.
+De `device_model.py:214-246`.
 
-**Read a register** (triggers a `0x71` response):
+**Ler um registrador** (dispara uma resposta `0x71`):
 ```
 [0xFF, 0xAA, 0x27, regAddr, 0x00]
 ```
-Byte 2 is the fixed read-trigger register `0x27`; byte 3 is the register
-to read back.
+O byte 2 é o registrador fixo de disparo de leitura `0x27`; o byte 3 é o
+registrador a ser lido.
 
-**Write a register:**
+**Escrever um registrador:**
 ```
-[0xFF, 0xAA, regAddr, valueLow, valueHigh]
+[0xFF, 0xAA, regAddr, valorLow, valorHigh]
 ```
 
-**Unlock** before writing config: `writeReg(0x69, 0xB588)`.
-**Save** after writing: `writeReg(0x00, 0x0000)`.
+**Unlock** antes de escrever configuração: `writeReg(0x69, 0xB588)`.
+**Save** depois de escrever: `writeReg(0x00, 0x0000)`.
 
-All are sent to the write characteristic `ffe9`.
+Todos são enviados para a characteristic de escrita `ffe9`.
 
-## 8. Still unconfirmed
+## 8. Ainda não confirmado
 
-- **Scales for velocity, displacement and frequency.** Register
-  addresses and units are documented, and the values are physically
-  plausible at rest (≈1 mm/s, 6-21 µm, 9-16 Hz), but no side-by-side
-  comparison against the official WitMotion app under real vibration has
-  been done. If a scale is off it is a one-line change in
-  `internal/protocol/wtvb01/registers.go`.
-- **Value 14 of the `0x61` packet** (the drifting counter). Likely the
-  battery percentage shown in the app, but unverified, so not decoded.
+- **Escalas de velocity, displacement e frequency.** Os endereços de
+  registrador e as unidades estão documentados, e os valores são
+  fisicamente plausíveis em repouso (≈1 mm/s, 6-21 µm, 9-16 Hz), mas não
+  houve comparação lado a lado com o app oficial da WitMotion sob
+  vibração real. Se alguma escala estiver errada, é mudança de uma linha
+  em `internal/protocol/wtvb01/registers.go`.
+- **Valor 14 do pacote `0x61`** (o contador com deriva). Provavelmente a
+  porcentagem de bateria mostrada no app, mas não verificado, então não
+  decodificado.
 
-Temperature, packet lengths, register addresses, framing, UUIDs and the
-command encoding are all confirmed.
+Temperatura, tamanhos de pacote, endereços de registrador, framing, UUIDs
+e a codificação dos comandos estão todos confirmados.

@@ -1,48 +1,50 @@
-# ESP32 Zenith Edge node
+# Nó ESP32 Zenith Edge
 
-Reads a WitMotion WTVB01-BT50 over BLE and publishes normalized readings
-to MQTT over WiFi. No PC required.
+Lê um WitMotion WTVB01-BT50 por BLE e publica leituras normalizadas em
+MQTT sobre WiFi. Não precisa de PC.
 
-## Why it is simple
+## Por que é simples
 
-The sensor puts every measurement register in its `0x61` broadcast and
-sends it unprompted, so this firmware **never writes to the sensor**. No
-register polling, no unlock/save, no command encoding. It scans,
-connects, subscribes to the notify characteristic, and parses.
+O sensor coloca todos os registradores de medição no seu broadcast `0x61`
+e envia sem ninguém pedir, então este firmware **nunca escreve no
+sensor**. Sem polling de registrador, sem unlock/save, sem codificação de
+comando. Ele faz scan, conecta, assina a characteristic de notify e faz o
+parse.
 
-The measurements are **not** in the BLE advertisement — only the service
-UUIDs are — so a connection is required. Passive sniffing will not work.
+As medições **não** estão no advertisement BLE — só os UUIDs de serviço
+estão — então a conexão é obrigatória. Escuta passiva não funciona.
 
 ## Hardware
 
-| Board | Works | Note |
+| Placa | Funciona | Observação |
 |---|---|---|
-| ESP32 (classic) | yes | |
-| ESP32-C3 | yes | cheapest option that works |
-| ESP32-S3 | yes | |
-| **ESP32-S2** | **no** | has no Bluetooth radio at all |
+| ESP32 (clássico) | sim | |
+| ESP32-C3 | sim | opção mais barata que serve |
+| ESP32-S3 | sim | |
+| **ESP32-S2** | **não** | não tem rádio Bluetooth nenhum |
 
-BLE and WiFi share one antenna on the ESP32. One sensor at a ~200 ms
-notification interval is comfortable; avoid saturating WiFi with
-continuous bulk transfers.
+BLE e WiFi dividem a mesma antena no ESP32. Um sensor com intervalo de
+notificação de ~200 ms é tranquilo; evite saturar o WiFi com transferências
+contínuas em bloco.
 
-NimBLE allows about three concurrent connections by default, so one node
-can serve several sensors after extending the connection handling here.
+O NimBLE permite cerca de três conexões simultâneas por padrão, então um
+nó pode atender vários sensores depois de estender o tratamento de
+conexão daqui.
 
-## Setup
+## Configuração
 
 ```bash
 cp src/config.example.h src/config.h
-# edit src/config.h with your WiFi and MQTT details
+# edite src/config.h com seus dados de WiFi e MQTT
 pio run -e esp32-c3 -t upload -t monitor
 ```
 
-`src/config.h` is gitignored, so credentials stay local. Pick the env
-matching your board: `esp32dev`, `esp32-c3`, or `esp32-s3`.
+`src/config.h` está no gitignore, então as credenciais ficam só na sua
+máquina. Escolha o env da sua placa: `esp32dev`, `esp32-c3` ou `esp32-s3`.
 
-## Published data
+## Dados publicados
 
-Topic: `zenith/readings/<sensor-mac>`
+Tópico: `zenith/readings/<mac-do-sensor>`
 
 ```json
 {
@@ -56,40 +58,40 @@ Topic: `zenith/readings/<sensor-mac>`
 }
 ```
 
-Units: velocity mm/s, displacement µm, angle degrees, frequency Hz,
-temperature °C. The schema matches `wtvb01.SensorReading` in the Go
-collector, so the two are interchangeable downstream.
+Unidades: velocity mm/s, displacement µm, angle graus, frequency Hz,
+temperature °C. O schema é igual ao de `wtvb01.SensorReading` no coletor
+Go, então os dois são intercambiáveis a jusante.
 
-`device.temperature` is the **sensor module's** temperature, not the
-machine's. See [`docs/indicators.md`](../../docs/indicators.md).
+`device.temperature` é a temperatura do **módulo sensor**, não da máquina.
+Veja [`docs/indicators.md`](../../docs/indicators.md).
 
-The node also publishes a retained `online`/`offline` value to
-`zenith/status`, with `offline` set as the MQTT last will so a crashed
-node is visible on the broker.
+O nó também publica um valor retido `online`/`offline` em
+`zenith/status`, com `offline` configurado como last will do MQTT, para
+que um nó travado fique visível no broker.
 
-## Tests
+## Testes
 
-`src/wtvb01.{h,cpp}` is dependency-free and builds on a host, so the
-decoder is tested against the same real captured sensor bytes as the Go
-implementation:
+`src/wtvb01.{h,cpp}` não tem dependências e compila no host, então o
+decoder é testado contra os mesmos bytes reais capturados do sensor que a
+implementação em Go usa:
 
 ```bash
 c++ -std=c++17 -I src -o /tmp/wtvb01_test test/decoder_test.cpp src/wtvb01.cpp
 /tmp/wtvb01_test ../../internal/protocol/wtvb01/testdata/capture-wtvb01-bt50.hex
 ```
 
-The strongest check exploits the fact that the `0x61` broadcast and the
-`0x71` register read-backs independently encode the same registers, so
-decoding either must agree.
+A verificação mais forte se apoia no fato de que o broadcast `0x61` e as
+leituras de registrador `0x71` codificam os mesmos registradores de forma
+independente, então precisam decodificar igual.
 
-## Troubleshooting
+## Resolução de problemas
 
-**Sensor not found.** Most often the phone app still holds the
-connection — BLE peripherals accept one central at a time and stop
-advertising while connected. Disconnect it in the phone's Bluetooth
-settings, not just by closing the app. Otherwise check the sensor is
-powered on.
+**Sensor não encontrado.** Na maioria das vezes o app do celular ainda
+está segurando a conexão — periféricos BLE aceitam um central por vez e
+param de anunciar enquanto conectados. Desconecte nas configurações de
+Bluetooth do celular, não basta fechar o app. Fora isso, confirme que o
+sensor está ligado.
 
-**Compiles but no data.** Confirm the board actually has BLE (not an
-ESP32-S2) and that `SENSOR_ADDRESS` in `config.h` is either empty or
-lowercase-matching the sensor MAC.
+**Compila mas não chega dado.** Confirme que a placa tem BLE de verdade
+(não é um ESP32-S2) e que `SENSOR_ADDRESS` no `config.h` está vazio ou
+casa em minúsculas com o MAC do sensor.

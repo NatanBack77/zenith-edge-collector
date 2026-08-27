@@ -1,137 +1,138 @@
-# What the sensor actually measures
+# O que o sensor mede de verdade
 
-The WTVB01-BT50 reports five things. Four of them describe vibration and
-are easy to confuse, because all four move together when a machine
-shakes. They answer different questions, and each one catches a
-different kind of fault.
+O WTVB01-BT50 reporta cinco coisas. Quatro descrevem vibração e são
+fáceis de confundir, porque todas se movem juntas quando a máquina treme.
+Elas respondem perguntas diferentes, e cada uma pega um tipo de falha
+diferente.
 
-## The four vibration indicators
+## Os quatro indicadores de vibração
 
-A vibrating machine surface moves back and forth. Describe that motion
-three ways and you get three of the indicators:
+Uma superfície vibrando vai e volta. Descreva esse movimento de três
+formas e você tem três dos indicadores:
 
-| Indicator | Answers | Unit | Axes |
+| Indicador | Responde | Unidade | Eixos |
 |---|---|---|---|
-| **Displacement** | How far does it move? | µm | X, Y, Z |
-| **Velocity** | How fast does it move? | mm/s | X, Y, Z |
-| **Frequency** | How often does it move? | Hz | X, Y, Z |
-| **Angular amplitude** | How much does it *tilt* as it moves? | degrees | X, Y, Z |
+| **Displacement** | Quão **longe** ela se move? | µm | X, Y, Z |
+| **Velocity** | Quão **rápido** ela se move? | mm/s | X, Y, Z |
+| **Frequency** | Com que **frequência** ela se move? | Hz | X, Y, Z |
+| **Angular amplitude** | Quanto ela **inclina** ao se mover? | graus | X, Y, Z |
 
-### Displacement — amplitude of travel
+### Displacement — amplitude do percurso
 
-The peak distance the surface travels during a vibration cycle. A shaft
-wobbling 200 µm off-centre reports 200 µm regardless of how fast it
-spins.
+A distância de pico que a superfície percorre num ciclo de vibração. Um
+eixo desbalanceado oscilando 200 µm fora de centro reporta 200 µm,
+independente da rotação.
 
-Displacement dominates at **low frequencies**. At 5 Hz a large physical
-movement produces low velocity, so a displacement reading catches it
-while a velocity reading barely registers. This is the indicator for
-unbalance, misalignment, looseness, bent shafts, and structural sway —
-slow, large-travel problems.
+Displacement domina em **baixa frequência**. A 5 Hz um movimento físico
+grande produz velocidade baixa, então o displacement pega enquanto a
+velocity mal registra. É o indicador para desbalanceamento,
+desalinhamento, folga, eixo empenado e balanço estrutural — problemas
+lentos e de curso grande.
 
-### Velocity — the general-purpose health number
+### Velocity — o número geral de saúde
 
-How fast the surface moves. This is the number most condition-monitoring
-standards are written against (ISO 10816 / ISO 20816 set machine
-vibration limits in mm/s RMS), because velocity is roughly flat across
-the mid frequency band where most mechanical faults live.
+Quão rápido a superfície se move. É o número contra o qual a maioria das
+normas de manutenção preditiva é escrita (ISO 10816 / ISO 20816 definem
+limites de vibração em mm/s RMS), porque a velocity é razoavelmente plana
+na faixa média de frequência onde vive a maior parte das falhas
+mecânicas.
 
-If you only ever track one number for overall machine health, track
-velocity. Rising velocity on a previously stable machine is the classic
-"something is going wrong" signal.
+**Se você só puder acompanhar um número, acompanhe velocity.** Velocity
+subindo numa máquina antes estável é o sinal clássico de "algo está indo
+mal".
 
-### Frequency — where the energy is, which tells you the cause
+### Frequency — onde está a energia, o que revela a causa
 
-How many cycles per second. This is the diagnostic indicator: amplitude
-tells you *that* something is wrong, frequency tells you *what*.
+Quantos ciclos por segundo. Este é o indicador **diagnóstico**: a
+amplitude diz *que* algo está errado, a frequência diz *o quê*.
 
-Faults show up at characteristic multiples of shaft speed. If a motor
-turns at 1800 rpm (30 Hz):
+As falhas aparecem em múltiplos característicos da rotação do eixo. Se um
+motor gira a 1800 rpm (30 Hz):
 
-- Energy at **30 Hz** (1× shaft speed) → unbalance
-- Energy at **60 Hz** (2×) → misalignment
-- Energy at **high, non-integer multiples** → bearing defects
-- Energy at **blade or tooth count × speed** → blade/gear problems
+- Energia em **30 Hz** (1× a rotação) → desbalanceamento
+- Energia em **60 Hz** (2×) → desalinhamento
+- Energia em **múltiplos altos e não inteiros** → defeito de rolamento
+- Energia em **nº de pás ou dentes × rotação** → problema de pá ou
+  engrenagem
 
-Two machines can show the same 5 mm/s velocity and need completely
-different repairs. The frequency is what separates them.
+Duas máquinas podem mostrar os mesmos 5 mm/s de velocity e precisar de
+reparos completamente diferentes. A frequência é o que separa as duas.
 
-### Angular amplitude — rocking, not travelling
+### Angular amplitude — balanço, não deslocamento
 
-How much the sensor *tilts* through the vibration cycle, in degrees. The
-manual calls this "angular vibration amplitude"; our code calls it
+Quanto o sensor **inclina** ao longo do ciclo de vibração, em graus. O
+manual chama isso de "angular vibration amplitude"; no código chamamos de
 `angle`.
 
-This is **not** the sensor's mounting orientation. A sensor lying flat
-and perfectly still reports ≈0°, and so does a sensor bolted to a
-vertical wall. What it measures is rotational oscillation: the surface
-rocking or twisting rather than moving in a straight line. Useful for
-detecting looseness, a soft foot, or torsional vibration — cases where
-part of the machine is pivoting about a point instead of translating.
+Isto **não** é a orientação de montagem do sensor. Um sensor deitado e
+parado reporta ≈0°, e um sensor parafusado numa parede vertical também.
+O que ele mede é oscilação rotacional: a superfície balançando ou
+torcendo em vez de se mover em linha reta. Útil para detectar folga, pé
+manco ou vibração torcional — casos em que parte da máquina pivota em
+torno de um ponto em vez de transladar.
 
-### How they relate
+### Como eles se relacionam
 
-For a single sinusoidal vibration, the three linear indicators are not
-independent — they are linked through frequency:
+Para uma vibração senoidal, os três indicadores lineares **não são
+independentes** — estão ligados pela frequência:
 
 ```
-velocity     ≈ 2π × frequency × displacement
+velocity  ≈  2π × frequency × displacement
 ```
 
-So a reading of 100 µm at 50 Hz gives roughly 31 mm/s, while the same
-100 µm at 2 Hz gives only 1.3 mm/s. This is why displacement and
-velocity disagree about which machine is "worse", and why both are
-reported:
+Então 100 µm a 50 Hz dá cerca de 31 mm/s, enquanto os mesmos 100 µm a
+2 Hz dão só 1,3 mm/s. É por isso que displacement e velocity discordam
+sobre qual máquina está "pior", e por isso os dois são reportados:
 
-- **Low frequency** → displacement is the sensitive indicator
-- **Mid frequency** → velocity is the sensitive indicator
-- **High frequency** → acceleration would be, which this sensor does not
-  expose in the vibration block
+- **Baixa frequência** → displacement é o indicador sensível
+- **Média frequência** → velocity é o indicador sensível
+- **Alta frequência** → seria aceleração, que este sensor não expõe no
+  bloco de vibração
 
-Three axes matter because vibration has direction. Radial (X/Y) energy
-points at unbalance and bearing wear; axial (Z, along the shaft) energy
-points at misalignment and thrust-bearing trouble.
+Três eixos importam porque vibração tem direção. Energia radial (X/Y)
+aponta desbalanceamento e desgaste de rolamento; energia axial (Z, ao
+longo do eixo) aponta desalinhamento e problema em mancal de escora.
 
-## Temperature — read the label carefully
+## Temperature — leia o rótulo com atenção
 
-The manual's register table names register `0x40` **"Product
-temperature"**: the temperature of the sensor module itself.
+A tabela de registradores do manual chama o registrador `0x40` de
+**"Product temperature"**: a temperatura do próprio módulo sensor.
 
-It is **not** the machine's temperature, and not a calibrated ambient
-probe. Mounted on a hot machine, the module reads somewhere between the
-machine surface and the surrounding air — dominated by conduction
-through the mount, and lagging behind real changes.
+**Não** é a temperatura da máquina, nem uma sonda de ambiente calibrada.
+Montado numa máquina quente, o módulo lê algo *entre* a superfície da
+máquina e o ar em volta — dominado pela condução através da fixação, e
+com atraso em relação a mudanças reais.
 
-This is why the data model calls it `device.temperature` and never
-`bearing_temperature` or `motor_temperature`. Naming it after the
-machine would invite someone downstream to alarm on it as if it were a
-bearing probe, which it is not.
+Por isso o modelo de dados chama isso de `device.temperature` e nunca
+`bearing_temperature` ou `motor_temperature`. Nomear pela máquina
+convidaria alguém a jusante a criar alarme em cima disso como se fosse
+sonda de mancal, o que não é.
 
-Observed on hardware: the sensor resting on a desk reported 24.4–25.1 °C
-in a room at about the same temperature — expected, since with no heat
-source the module equilibrates with the air.
+Observado no hardware: o sensor parado na mesa reportou 24,4–25,1 °C numa
+sala mais ou menos nessa temperatura — esperado, já que sem fonte de
+calor o módulo entra em equilíbrio com o ar.
 
-What it is genuinely good for: detecting that the sensor itself is
-cooking, correcting for temperature drift in the vibration readings, and
-catching gross thermal events. For real bearing temperature, use a probe
-mounted on the bearing.
+Para o que serve de verdade: detectar que o próprio sensor está
+esquentando demais, corrigir deriva térmica nas leituras de vibração e
+pegar eventos térmicos grosseiros. Para temperatura real de mancal, use
+uma sonda no mancal.
 
-## In practice
+## Na prática
 
-A healthy baseline followed by change is what matters — absolute numbers
-mean little without knowing what the machine normally does.
+O que importa é uma linha de base saudável seguida de mudança — números
+absolutos dizem pouco sem saber o que a máquina normalmente faz.
 
-1. Baseline every indicator on a known-good machine.
-2. Watch **velocity** for overall health; it is what the ISO limits
-   target.
-3. When velocity rises, read **frequency** to identify the cause.
-4. Cross-check **displacement** for slow, large-movement faults that
-   velocity underweights.
-5. Treat **temperature** as a signal about the sensor, not the machine.
+1. Estabeleça a linha de base de todos os indicadores com a máquina
+   comprovadamente boa.
+2. Acompanhe **velocity** para saúde geral; é o alvo dos limites ISO.
+3. Quando a velocity subir, leia **frequency** para identificar a causa.
+4. Cruze com **displacement** para falhas lentas e de curso grande, que a
+   velocity subestima.
+5. Trate **temperature** como sinal sobre o sensor, não sobre a máquina.
 
-## Sources
+## Fontes
 
-- [WTVB01-BT50 instruction manual (RobotShop mirror)](https://cdn.robotshop.com/rbm/f83835f4-5e29-4ee0-9cc2-e49300031503/b/bc40f091-5d65-4712-969d-707ac88c1ca4/8d1ba329_wtvb01-bt50-manual.pdf)
-- [WIT WTVB01-BT50 instruction manual (ManualsLib)](https://www.manualslib.com/manual/3151193/Wit-Wtvb01-Bt50.html)
-- [WitMotion vibration sensor product page](https://www.wit-motion.com/Vibration.html)
-- [WTVB01-BT50 product page](https://witmotion-sensor.com/products/wtvb01-bt50-bluetooth-50m-wireless-multi-connected-vibration-sensor)
+- [Manual do WTVB01-BT50 (espelho RobotShop)](https://cdn.robotshop.com/rbm/f83835f4-5e29-4ee0-9cc2-e49300031503/b/bc40f091-5d65-4712-969d-707ac88c1ca4/8d1ba329_wtvb01-bt50-manual.pdf)
+- [Manual WIT WTVB01-BT50 (ManualsLib)](https://www.manualslib.com/manual/3151193/Wit-Wtvb01-Bt50.html)
+- [Página de sensores de vibração da WitMotion](https://www.wit-motion.com/Vibration.html)
+- [Página do produto WTVB01-BT50](https://witmotion-sensor.com/products/wtvb01-bt50-bluetooth-50m-wireless-multi-connected-vibration-sensor)

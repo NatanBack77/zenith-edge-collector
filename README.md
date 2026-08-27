@@ -1,44 +1,44 @@
 # Zenith Edge Collector
 
-A Go service that discovers, connects to, and reads the WitMotion
-WTVB01-BT50 BLE vibration sensor, producing normalized readings.
+Serviço em Go que descobre, conecta e lê o sensor de vibração BLE
+WitMotion WTVB01-BT50, produzindo leituras normalizadas.
 
-Runs as a BLE central on Linux via BlueZ/D-Bus, using
+Roda como BLE central em Linux via BlueZ/D-Bus, usando
 [tinygo.org/x/bluetooth](https://tinygo.org/x/bluetooth).
 
-Two collectors read the same sensor and emit the same JSON schema:
+Dois coletores leem o mesmo sensor e emitem o mesmo schema JSON:
 
-- **`cmd/zenith-edge`** — Go CLI on Linux/BlueZ, for development and
-  protocol work.
-- **`firmware/esp32-zenith-node`** — standalone ESP32 node publishing to
-  MQTT over WiFi, for the field.
+- **`cmd/zenith-edge`** — CLI em Go sobre Linux/BlueZ, para
+  desenvolvimento e trabalho de protocolo.
+- **`firmware/esp32-zenith-node`** — nó ESP32 autônomo publicando em MQTT
+  por WiFi, para campo.
 
-See [docs/architecture.md](docs/architecture.md) for the data flow and
-diagrams.
+Veja [docs/architecture.md](docs/architecture.md) para o fluxo de dados e
+os diagramas.
 
 ## Status
 
-MVP. Scanning, connecting, and decoding work against physical hardware,
-on both the Go collector and the ESP32 node. Local buffering, metrics,
-and multi-sensor handling are deliberately not implemented yet.
+MVP. Scan, conexão e decodificação funcionam contra hardware físico, tanto
+no coletor Go quanto no nó ESP32. Buffer local, métricas e múltiplos
+sensores simultâneos ainda não foram implementados, de propósito.
 
-## Install
+## Instalação
 
 ```bash
 go install github.com/NatanBack77/zenith-edge-collector/cmd/zenith-edge@latest
 ```
 
-Or from a clone:
+Ou a partir de um clone:
 
 ```bash
 go install ./cmd/zenith-edge
 ```
 
-Requires a working BlueZ stack (`systemctl status bluetooth`).
+Requer BlueZ funcionando (`systemctl status bluetooth`).
 
-## Usage
+## Uso
 
-Find the sensor:
+Encontrar o sensor:
 
 ```console
 $ zenith-edge scan
@@ -46,11 +46,11 @@ Scanning for 10s (WitMotion devices: "WT" name or service 0000ffe5-...)...
 E6:6B:9A:CC:88:25     WTVB01-BT50               RSSI  -49  <- WitMotion service ffe5
 ```
 
-`--all` lists every BLE device in range, `--verbose` adds advertised
-service UUIDs and manufacturer IDs — useful when a sensor advertises no
-local name.
+`--all` lista todos os dispositivos BLE ao alcance, `--verbose` acrescenta
+os UUIDs de serviço e IDs de fabricante anunciados — útil quando um sensor
+não anuncia nome.
 
-Stream decoded readings:
+Transmitir leituras decodificadas:
 
 ```console
 $ zenith-edge test --sensor E6:6B:9A:CC:88:25
@@ -59,66 +59,71 @@ Streaming decoded readings (Ctrl+C to stop)...
 [10:38:37.832] angle(0.00,0.01,0.00) vel(1.000,0.000,0.000)mm/s disp(21.0,9.0,6.0)um freq(11.0,12.0,16.0)Hz temp=24.9C
 ```
 
-`--raw` dumps hex notification payloads instead, for capturing fixtures.
+`--raw` despeja os payloads de notificação em hex, para capturar fixtures.
 
-## What it measures
+## O que ele mede
 
-Five indicators, three of them axial:
+Cinco indicadores, três deles por eixo:
 
-| Field | Unit | What it tells you |
+| Campo | Unidade | O que diz |
 |---|---|---|
-| `velocity` | mm/s | Overall machine health — what ISO 10816/20816 limits target |
-| `displacement` | µm | Low-frequency faults: unbalance, misalignment, looseness |
-| `frequency` | Hz | *Which* fault, via multiples of shaft speed |
-| `angle` | degrees | Angular vibration amplitude — rocking, not mounting tilt |
-| `device.temperature` | °C | The **sensor module's** temperature, not the machine's |
+| `velocity` | mm/s | Saúde geral da máquina — é o alvo dos limites ISO 10816/20816 |
+| `displacement` | µm | Falhas de baixa frequência: desbalanceamento, desalinhamento, folga |
+| `frequency` | Hz | *Qual* é a falha, via múltiplos da rotação do eixo |
+| `angle` | graus | Amplitude angular de vibração — balanço, não inclinação de montagem |
+| `device.temperature` | °C | Temperatura do **módulo sensor**, não da máquina |
 
-`device.temperature` is named that way deliberately. The manual calls
-register `0x40` "Product temperature": it is the module's own
-temperature, not a bearing or motor probe. See
-[docs/indicators.md](docs/indicators.md) for what each indicator catches
-and how they relate.
+`device.temperature` tem esse nome de propósito. O manual chama o
+registrador `0x40` de "Product temperature": é a temperatura do próprio
+módulo, não uma sonda de mancal ou motor. Veja
+[docs/indicators.md](docs/indicators.md) para o que cada indicador pega e
+como eles se relacionam.
 
-## Protocol
+## Protocolo
 
-[docs/protocol.md](docs/protocol.md) documents the BLE protocol, derived
-from the official Python SDK and verified against bytes captured from a
-physical sensor.
+[docs/protocol.md](docs/protocol.md) documenta o protocolo BLE, derivado
+do SDK Python oficial e verificado contra bytes capturados de um sensor
+físico.
 
-One correction worth highlighting: WitMotion's generic BWT901 SDK
-hardcodes a 20-byte packet for both packet types. The WTVB01-BT50's
-`0x61` broadcast is **32 bytes**. Decoding it as 20 silently misreads
-every field while still producing plausible-looking numbers.
+Uma correção que vale destacar: o SDK genérico BWT901 da WitMotion fixa
+um pacote de 20 bytes para os dois tipos. O broadcast `0x61` do
+WTVB01-BT50 tem **32 bytes**. Decodificá-lo como 20 lê errado todos os
+campos e ainda assim produz números de aparência plausível.
 
-## Layout
+## Estrutura
 
 ```
 cmd/zenith-edge/            CLI: scan, test
-internal/ble/               BLE scanning and connection (BlueZ)
-internal/protocol/wtvb01/   Packet framing and register decoding
-  testdata/                 Bytes captured from a physical sensor
-firmware/esp32-zenith-node/ ESP32 firmware: BLE -> MQTT
+internal/ble/               Scan e conexão BLE (BlueZ)
+internal/protocol/wtvb01/   Framing de pacote e decodificação de registrador
+  testdata/                 Bytes capturados de um sensor físico
+firmware/esp32-zenith-node/ Firmware ESP32: BLE -> MQTT
 docs/
-  architecture.md           Data flow and diagrams
-  protocol.md               BLE protocol reference
-  indicators.md             What each measurement means
+  architecture.md           Fluxo de dados e diagramas
+  protocol.md               Referência do protocolo BLE
+  indicators.md             O que cada medição significa
 ```
 
-## Tests
+## Testes
 
 ```bash
 go test ./...
 ```
 
-Tests replay real captured sensor bytes. The strongest check,
-`TestOutputAndRegisterPacketsAgree`, exploits the fact that the `0x61`
-broadcast and `0x71` register read-backs independently encode the same
-registers, so they must decode identically.
+Os testes reproduzem bytes reais capturados do sensor. A verificação mais
+forte, `TestOutputAndRegisterPacketsAgree`, se apoia no fato de que o
+broadcast `0x61` e as leituras de registrador `0x71` codificam os mesmos
+registradores de forma independente, então precisam decodificar igual.
 
-## Not yet verified
+## Ainda não verificado
 
-Scale factors for velocity, displacement and frequency come from the
-manual and produce physically plausible values at rest, but have not
-been compared side by side against the official WitMotion app under real
-vibration. Any correction is a one-line change in
-`internal/protocol/wtvb01/registers.go`.
+As escalas de velocity, displacement e frequency vêm do manual e produzem
+valores fisicamente plausíveis em repouso, mas não foram comparadas lado a
+lado com o app oficial da WitMotion sob vibração real. Qualquer correção é
+mudança de uma linha em `internal/protocol/wtvb01/registers.go`.
+
+## Nota sobre idioma
+
+A documentação está em português. Comentários e identificadores no código
+seguem em inglês, que é a convenção das linguagens e das bibliotecas
+usadas aqui.
