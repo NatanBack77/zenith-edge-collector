@@ -6,11 +6,21 @@ WTVB01-BT50 BLE vibration sensor, producing normalized readings.
 Runs as a BLE central on Linux via BlueZ/D-Bus, using
 [tinygo.org/x/bluetooth](https://tinygo.org/x/bluetooth).
 
+Two collectors read the same sensor and emit the same JSON schema:
+
+- **`cmd/zenith-edge`** — Go CLI on Linux/BlueZ, for development and
+  protocol work.
+- **`firmware/esp32-zenith-node`** — standalone ESP32 node publishing to
+  MQTT over WiFi, for the field.
+
+See [docs/architecture.md](docs/architecture.md) for the data flow and
+diagrams.
+
 ## Status
 
-MVP. Scanning, connecting, and decoding work against physical hardware.
-Transport (MQTT/HTTP), local buffering, metrics, and multi-sensor
-handling are deliberately not implemented yet.
+MVP. Scanning, connecting, and decoding work against physical hardware,
+on both the Go collector and the ESP32 node. Local buffering, metrics,
+and multi-sensor handling are deliberately not implemented yet.
 
 ## Install
 
@@ -87,7 +97,11 @@ cmd/zenith-edge/            CLI: scan, test
 internal/ble/               BLE scanning and connection (BlueZ)
 internal/protocol/wtvb01/   Packet framing and register decoding
   testdata/                 Bytes captured from a physical sensor
-docs/                       Protocol and indicator reference
+firmware/esp32-zenith-node/ ESP32 firmware: BLE -> MQTT
+docs/
+  architecture.md           Data flow and diagrams
+  protocol.md               BLE protocol reference
+  indicators.md             What each measurement means
 ```
 
 ## Tests

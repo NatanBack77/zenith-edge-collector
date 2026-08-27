@@ -1,2 +1,6 @@
 zenith-edge
 /bin/
+
+# ESP32 firmware
+firmware/esp32-zenith-node/src/config.h
+firmware/esp32-zenith-node/.pio/
