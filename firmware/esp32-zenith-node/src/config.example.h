@@ -4,8 +4,13 @@
 #pragma once
 
 // ---- WiFi ----
-#define WIFI_SSID "your-ssid"
-#define WIFI_PASSWORD "your-password"
+// Tries WIFI_SSID first; if it can't connect within WIFI_TRY_TIMEOUT_MS,
+// falls back to WIFI_SSID2. Leave WIFI_SSID2 empty to disable the fallback.
+#define WIFI_SSID "brisa-162165"
+#define WIFI_PASSWORD "iskkkhjde"
+#define WIFI_SSID2 ""
+#define WIFI_PASSWORD2 ""
+#define WIFI_TRY_TIMEOUT_MS 15000
 
 // ---- MQTT ----
 #define MQTT_HOST "192.168.1.10"

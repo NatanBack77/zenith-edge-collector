@@ -64,7 +64,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       return;
     }
     if (strlen(SENSOR_ADDRESS) > 0 &&
-        !device->getAddress().toString().equals(SENSOR_ADDRESS)) {
+        device->getAddress().toString() != SENSOR_ADDRESS) {
       return;
     }
 
@@ -136,20 +136,40 @@ bool ConnectToSensor() {
 
 // --------------------------------------------------------- WiFi / MQTT
 
+// Tries each configured SSID in turn, giving up on one after
+// WIFI_TRY_TIMEOUT_MS and moving to the next, looping until one connects.
+bool TryWiFiNetwork(const char *ssid, const char *password) {
+  Serial.printf("[wifi] connecting to %s\n", ssid);
+  WiFi.begin(ssid, password);
+
+  const uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start > WIFI_TRY_TIMEOUT_MS) {
+      Serial.printf("\n[wifi] %s timed out\n", ssid);
+      return false;
+    }
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.printf("\n[wifi] connected to %s, ip %s\n", ssid,
+                WiFi.localIP().toString().c_str());
+  return true;
+}
+
 void EnsureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     return;
   }
 
-  Serial.printf("[wifi] connecting to %s\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.printf("\n[wifi] connected, ip %s\n", WiFi.localIP().toString().c_str());
+  do {
+    if (TryWiFiNetwork(WIFI_SSID, WIFI_PASSWORD)) {
+      return;
+    }
+    if (strlen(WIFI_SSID2) > 0 && TryWiFiNetwork(WIFI_SSID2, WIFI_PASSWORD2)) {
+      return;
+    }
+  } while (true);
 }
 
 void EnsureMQTT() {
