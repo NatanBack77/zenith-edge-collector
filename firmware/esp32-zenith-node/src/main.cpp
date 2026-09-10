@@ -136,16 +136,43 @@ bool ConnectToSensor() {
 
 // --------------------------------------------------------- WiFi / MQTT
 
-// Tries each configured SSID in turn, giving up on one after
-// WIFI_TRY_TIMEOUT_MS and moving to the next, looping until one connects.
+// Diagnostic: scans and logs every network the radio can actually see,
+// flagging which ones match an entry in WIFI_NETWORKS. Helps tell apart
+// "AP out of range" from "AP visible but rejects the connection".
+void LogVisibleNetworks() {
+  Serial.println("[wifi] scanning...");
+  const int count = WiFi.scanNetworks();
+  if (count <= 0) {
+    Serial.println("[wifi] scan found nothing");
+    return;
+  }
+  for (int i = 0; i < count; i++) {
+    bool known = false;
+    for (size_t j = 0; j < WIFI_NETWORKS_COUNT; j++) {
+      if (WiFi.SSID(i) == WIFI_NETWORKS[j].ssid) {
+        known = true;
+        break;
+      }
+    }
+    Serial.printf("[wifi]   %-24s ch=%2d rssi=%4d auth=%d%s\n",
+                  WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i),
+                  WiFi.encryptionType(i), known ? "  <- configured" : "");
+  }
+  WiFi.scanDelete();
+}
+
+// Tries one SSID, giving up after WIFI_TRY_TIMEOUT_MS.
 bool TryWiFiNetwork(const char *ssid, const char *password) {
   Serial.printf("[wifi] connecting to %s\n", ssid);
+  WiFi.disconnect(true);
+  delay(100);
   WiFi.begin(ssid, password);
 
   const uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
     if (millis() - start > WIFI_TRY_TIMEOUT_MS) {
-      Serial.printf("\n[wifi] %s timed out\n", ssid);
+      Serial.printf("\n[wifi] %s timed out, status=%d\n", ssid,
+                    WiFi.status());
       return false;
     }
     delay(500);
@@ -156,18 +183,20 @@ bool TryWiFiNetwork(const char *ssid, const char *password) {
   return true;
 }
 
+// Tries every network in WIFI_NETWORKS (src/config.h) in order, looping
+// forever until one connects.
 void EnsureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     return;
   }
 
   WiFi.mode(WIFI_STA);
+  LogVisibleNetworks();
   do {
-    if (TryWiFiNetwork(WIFI_SSID, WIFI_PASSWORD)) {
-      return;
-    }
-    if (strlen(WIFI_SSID2) > 0 && TryWiFiNetwork(WIFI_SSID2, WIFI_PASSWORD2)) {
-      return;
+    for (size_t i = 0; i < WIFI_NETWORKS_COUNT; i++) {
+      if (TryWiFiNetwork(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password)) {
+        return;
+      }
     }
   } while (true);
 }

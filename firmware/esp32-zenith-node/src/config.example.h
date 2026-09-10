@@ -3,13 +3,17 @@
 
 #pragma once
 
+#include "wifi_credential.h"
+
 // ---- WiFi ----
-// Tries WIFI_SSID first; if it can't connect within WIFI_TRY_TIMEOUT_MS,
-// falls back to WIFI_SSID2. Leave WIFI_SSID2 empty to disable the fallback.
-#define WIFI_SSID "brisa-162165"
-#define WIFI_PASSWORD "iskkkhjde"
-#define WIFI_SSID2 ""
-#define WIFI_PASSWORD2 ""
+// Add as many networks as you want here. The node tries each one in
+// order, giving up on one after WIFI_TRY_TIMEOUT_MS and moving to the
+// next, looping forever until one connects.
+static const WifiCredential WIFI_NETWORKS[] = {
+    {"your-ssid", "your-password"},
+    // {"second-ssid", "second-password"},
+};
+#define WIFI_NETWORKS_COUNT (sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]))
 #define WIFI_TRY_TIMEOUT_MS 15000
 
 // ---- MQTT ----
