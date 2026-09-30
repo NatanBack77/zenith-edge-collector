@@ -6,10 +6,25 @@ MQTT sobre WiFi. Não precisa de PC.
 ## Por que é simples
 
 O sensor coloca todos os registradores de medição no seu broadcast `0x61`
-e envia sem ninguém pedir, então este firmware **nunca escreve no
-sensor**. Sem polling de registrador, sem unlock/save, sem codificação de
-comando. Ele faz scan, conecta, assina a characteristic de notify e faz o
-parse.
+e envia sem ninguém pedir, então este firmware **por padrão nunca escreve
+no sensor**. Sem polling de registrador, sem unlock/save, sem codificação
+de comando. Ele faz scan, conecta, assina a characteristic de notify e
+faz o parse.
+
+Existe uma única exceção opcional, desligada por padrão:
+`SENSOR_CONFIGURE_RATE` em `config.h` (ver comentário lá) escreve o
+registrador de taxa de saída (`0x03`, universal na família WitMotion
+WT/BWT, mas **não testado em bancada** contra este sensor físico neste
+repositório) pra subir de 10Hz (padrão de fábrica) até 200Hz. O formato
+do comando de escrita está confirmado (`docs/protocol.md` §7, vindo do
+SDK oficial), mas o efeito real no hardware ainda não foi verificado
+aqui — teste numa bancada antes de confiar em campo.
+
+`PUBLISH_INTERVAL_MS` (o quanto o nó publica por segundo pro MQTT) era
+1000ms por padrão, jogando fora a maior parte do que o sensor já entrega
+via notify (~200ms de cadência nativa, ver abaixo) — isso não precisa de
+escrita no sensor pra melhorar, é gargalo puro do firmware. Agora é
+200ms por padrão.
 
 As medições **não** estão no advertisement BLE — só os UUIDs de serviço
 estão — então a conexão é obrigatória. Escuta passiva não funciona.

@@ -18,6 +18,10 @@ namespace {
 
 constexpr uint32_t kScanDurationSec = 10;
 constexpr uint32_t kReconnectDelayMs = 3000;
+// Minimum gap between WiFi / MQTT reconnect rounds. Keeps a missing
+// network from stalling BLE sampling on every loop() pass.
+constexpr uint32_t kWifiRetryIntervalMs = 30000;
+constexpr uint32_t kMqttRetryIntervalMs = 5000;
 
 WiFiClient wifi_client;
 PubSubClient mqtt(wifi_client);
@@ -209,6 +213,38 @@ bool ConnectSlot(SensorSlot &slot, size_t index) {
     return false;
   }
 
+#if SENSOR_CONFIGURE_RATE
+  // Optional, off by default -- see config.example.h for why. Runs once
+  // per (re)connect; failure here does not disconnect the slot, since
+  // the sensor keeps streaming at whatever rate it already has.
+  {
+    NimBLERemoteCharacteristic *write_char =
+        service->getCharacteristic(NimBLEUUID(wtvb01::kWriteCharUUID));
+    if (write_char == nullptr || !write_char->canWrite()) {
+      Serial.printf(
+          "[ble] slot %u write characteristic ffe9 unavailable -- output "
+          "rate left unchanged\n",
+          (unsigned)index);
+    } else {
+      uint8_t cmd[wtvb01::kCommandLen];
+      wtvb01::BuildWriteRegisterCommand(wtvb01::kRegUnlock,
+                                         wtvb01::kUnlockValue, cmd);
+      write_char->writeValue(cmd, sizeof(cmd), false);
+      delay(50);
+      wtvb01::BuildWriteRegisterCommand(
+          wtvb01::kRegRate, static_cast<uint16_t>(SENSOR_RATE_CODE), cmd);
+      write_char->writeValue(cmd, sizeof(cmd), false);
+      delay(50);
+      wtvb01::BuildWriteRegisterCommand(wtvb01::kRegSave, 0x0000, cmd);
+      write_char->writeValue(cmd, sizeof(cmd), false);
+      Serial.printf(
+          "[ble] slot %u requested output rate code 0x%02X -- verify the "
+          "notify cadence actually changed before trusting this\n",
+          (unsigned)index, SENSOR_RATE_CODE);
+    }
+  }
+#endif
+
   slot.address = slot.client->getPeerAddress().toString().c_str();
   Serial.printf("[ble] slot %u streaming from %s\n", (unsigned)index,
                 slot.address.c_str());
@@ -305,53 +341,68 @@ bool TryWiFiNetwork(const char *ssid, const char *password) {
 // even in range right now.
 size_t last_good_network = 0;
 
-// Tries every network in WIFI_NETWORKS (src/config.h), starting from
-// last_good_network and wrapping around, looping forever until one
-// connects.
-void EnsureWiFi() {
+// Tries every network in WIFI_NETWORKS (src/config.h) once, starting
+// from last_good_network and wrapping around. Returns true if connected.
+// Never blocks forever: after a failed round it backs off for
+// kWifiRetryIntervalMs, so BLE sampling keeps running with no network.
+bool EnsureWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
-    return;
+    return true;
   }
+
+  static bool attempted = false;
+  static uint32_t last_round_ms = 0;
+  if (attempted && millis() - last_round_ms < kWifiRetryIntervalMs) {
+    return false;
+  }
+  attempted = true;
 
   WiFi.mode(WIFI_STA);
   LogVisibleNetworks();
-  do {
-    for (size_t k = 0; k < WIFI_NETWORKS_COUNT; k++) {
-      const size_t i = (last_good_network + k) % WIFI_NETWORKS_COUNT;
-      if (TryWiFiNetwork(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password)) {
-        last_good_network = i;
-        return;
-      }
+  for (size_t k = 0; k < WIFI_NETWORKS_COUNT; k++) {
+    const size_t i = (last_good_network + k) % WIFI_NETWORKS_COUNT;
+    if (TryWiFiNetwork(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password)) {
+      last_good_network = i;
+      return true;
     }
-  } while (true);
+  }
+  last_round_ms = millis();
+  Serial.println("[wifi] no network available; sampling continues offline");
+  return false;
 }
 
-void EnsureMQTT() {
+// One connect attempt per kMqttRetryIntervalMs. Returns true if connected.
+bool EnsureMQTT() {
   if (mqtt.connected()) {
-    return;
+    return true;
   }
+
+  static uint32_t last_attempt_ms = 0;
+  static bool attempted = false;
+  if (attempted && millis() - last_attempt_ms < kMqttRetryIntervalMs) {
+    return false;
+  }
+  attempted = true;
+  last_attempt_ms = millis();
 
   const String client_id = "zenith-" + WiFi.macAddress();
+  Serial.printf("[mqtt] connecting to %s:%d\n", MQTT_HOST, MQTT_PORT);
 
-  while (!mqtt.connected()) {
-    Serial.printf("[mqtt] connecting to %s:%d\n", MQTT_HOST, MQTT_PORT);
-
-    // The last will publishes "offline" if this node drops off without
-    // saying goodbye, so a dead node is visible on the broker.
-    const bool ok =
-        mqtt.connect(client_id.c_str(),
-                     strlen(MQTT_USER) > 0 ? MQTT_USER : nullptr,
-                     strlen(MQTT_PASSWORD) > 0 ? MQTT_PASSWORD : nullptr,
-                     MQTT_TOPIC_STATUS, 0, true, "offline");
-    if (ok) {
-      Serial.println("[mqtt] connected");
-      mqtt.publish(MQTT_TOPIC_STATUS, "online", true);
-      return;
-    }
-
-    Serial.printf("[mqtt] failed, rc=%d; retrying\n", mqtt.state());
-    delay(kReconnectDelayMs);
+  // The last will publishes "offline" if this node drops off without
+  // saying goodbye, so a dead node is visible on the broker.
+  const bool ok =
+      mqtt.connect(client_id.c_str(),
+                   strlen(MQTT_USER) > 0 ? MQTT_USER : nullptr,
+                   strlen(MQTT_PASSWORD) > 0 ? MQTT_PASSWORD : nullptr,
+                   MQTT_TOPIC_STATUS, 0, true, "offline");
+  if (ok) {
+    Serial.println("[mqtt] connected");
+    mqtt.publish(MQTT_TOPIC_STATUS, "online", true);
+    return true;
   }
+
+  Serial.printf("[mqtt] failed, rc=%d; will retry\n", mqtt.state());
+  return false;
 }
 
 // Returns false if the broker write failed (transient broker-side
@@ -488,7 +539,10 @@ void setup() {
   delay(200);
   Serial.println("\nZenith Edge node starting");
 
-  EnsureWiFi();
+  NimBLEDevice::init("zenith-edge-node");
+  // The sensor is a low-power peripheral; boosting TX power helps at
+  // range in a noisy plant.
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setBufferSize(768);
@@ -505,18 +559,12 @@ void setup() {
   // publish(). Measured: see config.h.
   mqtt.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SEC);
   wifi_client.setTimeout(MQTT_SOCKET_TIMEOUT_SEC);
-  EnsureMQTT();
-
-  NimBLEDevice::init("zenith-edge-node");
-  // The sensor is a low-power peripheral; boosting TX power helps at
-  // range in a noisy plant.
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 }
 
 void loop() {
-  EnsureWiFi();
-  EnsureMQTT();
-  mqtt.loop();
+  if (EnsureWiFi() && EnsureMQTT()) {
+    mqtt.loop();
+  }
 
   EnsureSensors();
 

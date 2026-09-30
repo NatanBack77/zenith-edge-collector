@@ -43,6 +43,28 @@ constexpr const char *kServiceUUID = "0000ffe5-0000-1000-8000-00805f9a34fb";
 constexpr const char *kNotifyCharUUID = "0000ffe4-0000-1000-8000-00805f9a34fb";
 constexpr const char *kWriteCharUUID = "0000ffe9-0000-1000-8000-00805f9a34fb";
 
+// Configuration registers and command format, from the official SDK
+// (device_model.py:214-246) -- see docs/protocol.md §7. Unlike the
+// measurement registers above (confirmed against a physical capture),
+// these are universal across WitMotion's whole WT/BWT product line and
+// have NOT been bench-verified against a real WTVB01-BT50 register write
+// in this repo. kRegRate itself is well established across the product
+// line; treat it as documented-but-unverified-on-this-unit, not as solid
+// as the measurement registers.
+constexpr uint8_t kRegRate = 0x03;
+constexpr uint8_t kRegUnlock = 0x69;
+constexpr uint8_t kRegSave = 0x00;
+constexpr uint16_t kUnlockValue = 0xB588;
+constexpr size_t kCommandLen = 5;
+
+// Builds a `[0xFF, 0xAA, reg, valueLow, valueHigh]` write-register
+// command into `out`, which must hold at least kCommandLen bytes. Send
+// to the write characteristic (kWriteCharUUID). Command sequence to
+// change a config register: BuildWriteRegisterCommand(kRegUnlock,
+// kUnlockValue, ...), then the target register, then
+// BuildWriteRegisterCommand(kRegSave, 0x0000, ...).
+void BuildWriteRegisterCommand(uint8_t reg, uint16_t value, uint8_t *out);
+
 struct Vector3 {
   float x = 0;
   float y = 0;

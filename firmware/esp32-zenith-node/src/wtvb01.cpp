@@ -23,6 +23,14 @@ inline float SignInt16LE(uint8_t low, uint8_t high) {
 
 }  // namespace
 
+void BuildWriteRegisterCommand(uint8_t reg, uint16_t value, uint8_t *out) {
+  out[0] = 0xFF;
+  out[1] = 0xAA;
+  out[2] = reg;
+  out[3] = static_cast<uint8_t>(value & 0xFF);
+  out[4] = static_cast<uint8_t>((value >> 8) & 0xFF);
+}
+
 size_t PacketLenFor(uint8_t packet_type) {
   switch (packet_type) {
     case kPacketTypeOutput:

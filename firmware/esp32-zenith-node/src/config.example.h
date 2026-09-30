@@ -65,13 +65,44 @@ static const char *const SENSOR_ADDRESSES[] = {
 #define MAX_AUTO_SENSORS 2
 
 // How often to sample, in milliseconds. The sensor broadcasts far
-// faster than this; readings between samples are coalesced. Sampling
-// keeps running at this cadence even while MQTT is disconnected.
-#define PUBLISH_INTERVAL_MS 1000
+// faster than this (README: "sensor com intervalo de notificação de
+// ~200 ms e tranquilo" -- i.e. the BLE notify itself already arrives
+// close to this cadence); readings between samples are coalesced.
+// Sampling keeps running at this cadence even while MQTT is disconnected.
+//
+// This was 1000ms, which threw away ~4/5 of the readings the sensor was
+// already delivering before ever reaching MQTT -- a pure software
+// bottleneck, not a sensor limit. 200ms keeps close to native notify
+// cadence without pushing so much MQTT traffic that a multi-sensor node
+// saturates WiFi (README also warns about that). This does NOT raise the
+// sensor's own output rate (see SENSOR_CONFIGURE_RATE below for that,
+// separate and experimental) -- it only stops discarding what already
+// arrives.
+#define PUBLISH_INTERVAL_MS 200
 
 // How many samples to hold in the ring buffer while MQTT is
 // disconnected, so a reconnect drains and republishes what was missed
 // instead of just resuming live. At one sample per PUBLISH_INTERVAL_MS,
-// the default holds 60s of outage before the oldest samples start
-// getting overwritten.
-#define READING_BUFFER_CAPACITY 60
+// 300 holds the same ~60s of outage as before (60 samples was sized for
+// the old 1000ms cadence; keeping it at 60 now would only cover ~12s).
+#define READING_BUFFER_CAPACITY 300
+
+// ---- Sensor output rate (optional, experimental -- NOT bench-tested) ----
+// The WTVB01-BT50's RATE register (0x03) defaults to 0x06 (10Hz) and can
+// be raised up to 0x0A (200Hz) -- this is documented for the general
+// WitMotion WT/BWT protocol family, not verified against a capture from
+// this specific sensor. This firmware normally never writes to the
+// sensor at all (see README's "por que é simples") -- this is the one
+// optional exception, off by default. The write-command format itself
+// (unlock/write/save via 0xFF 0xAA framing) IS confirmed from the
+// official SDK -- see docs/protocol.md §7 -- but nobody has bench-tested
+// an actual register write against physical hardware in this repo yet.
+// Enable and verify on a bench unit (watch Serial output, confirm the
+// notify interval actually changes) before relying on this in the field.
+#define SENSOR_CONFIGURE_RATE 0
+// 0x06=10Hz (factory default) 0x07=20Hz 0x08=50Hz 0x09=100Hz 0x0A=200Hz.
+// Recommended starting point on the bench: 0x08 (50Hz) -- comfortably
+// above what 1x-3x order analysis needs for typical industrial RPMs,
+// without generating BLE/WiFi traffic a multi-sensor node can't keep up
+// with. Only relevant when SENSOR_CONFIGURE_RATE is 1.
+#define SENSOR_RATE_CODE 0x08
