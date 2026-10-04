@@ -20,6 +20,13 @@ const (
 	// which sends 32. Verified over 110 captured packets.
 	outputPacketLen = 32
 
+	// instantPacketLen is the "Now data" 0x61 packet: 2 header bytes + 8
+	// time bytes + 15 int16 values. It shares the 0x61 type byte with the
+	// 32-byte Default packet, so the type byte alone does not give the
+	// length: the Decoder finds it from where the NEXT header sits. Seen
+	// on hardware (firmware 10057.2.7); the manual lists it in §5.2.2.
+	instantPacketLen = 40
+
 	// registerPacketLen is the register read-back size: 2 header bytes +
 	// 2 address bytes + 8 registers * 2 bytes. Matches the SDK and the
 	// official manual. Verified over 11 captured packets.
@@ -80,13 +87,33 @@ const (
 	blockMeasurementB byte = 0x42 // covers 0x42-0x49
 )
 
+// Battery and data-mode registers.
+const (
+	// regBattery is "BatPer": centivolts, also the last value of the
+	// Default 0x61 packet. CONFIRMED on hardware.
+	regBattery byte = 0x64
+
+	// regDataMode selects the 0x61 format: 1 = Now data, 0 = Default. Not
+	// in the V260410 manual: captured from the official app's "Data mode"
+	// selector.
+	regDataMode byte = 0x96
+)
+
+// Now data packet scales.
+const (
+	// AccelScaleG converts an acceleration count to g (+-16 g over int16).
+	AccelScaleG = 16.0 / 32768.0
+	gyroRange   = 2000.0 // raw/32768*2000 -> deg/s
+	battCentiV  = 100.0  // raw/100 -> volts
+)
+
 // Scale factors. Only temperature is hardware-confirmed; the rest
 // follow the documented WTVB01 units and are pending app comparison.
 const (
-	temperatureScale = 100.0 // raw/100 -> degrees Celsius (CONFIRMED)
-	angleScale       = 32768.0
-	angleRange       = 180.0 // raw/32768*180 -> degrees
-	velocityScale     = 1.0 // raw -> mm/s
-	displacementScale = 1.0 // raw -> micrometres
-	frequencyScale    = 1.0 // raw -> Hz
+	temperatureScale  = 100.0 // raw/100 -> degrees Celsius (CONFIRMED)
+	angleScale        = 32768.0
+	angleRange        = 180.0 // raw/32768*180 -> degrees
+	velocityScale     = 1.0   // raw -> mm/s
+	displacementScale = 1.0   // raw -> micrometres
+	frequencyScale    = 1.0   // raw -> Hz
 )

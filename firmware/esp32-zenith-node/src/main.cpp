@@ -506,8 +506,9 @@ void PublishNodeDiag() {
       ResetReasonName(esp_reset_reason()), (unsigned long)millis(),
       (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
       (int)WiFi.RSSI());
-  const String topic = String("zenith/node/") + WiFi.macAddress();
-  mqtt.publish(topic.c_str(), reinterpret_cast<const uint8_t *>(payload), n, true);
+  char topic[64];
+  snprintf(topic, sizeof(topic), "zenith/node/%s", WiFi.macAddress().c_str());
+  mqtt.publish(topic, reinterpret_cast<const uint8_t *>(payload), n, true);
   Serial.printf("[sys] up=%lus heap=%u min=%u reset=%s\n",
                 (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMinFreeHeap(),
@@ -712,8 +713,11 @@ bool PublishReading(SensorSlot &slot, const BufferedReading &buffered) {
   char payload[640];
   const size_t n = serializeJson(doc, payload, sizeof(payload));
 
-  const String topic = String(MQTT_TOPIC_BASE) + "/" + slot.address;
-  if (!mqtt.publish(topic.c_str(), payload, n)) {
+  // Fixed buffer, not String: this runs ~5x/s for hours, and a String
+  // allocated and freed on every call is a steady source of heap churn.
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%s/%s", MQTT_TOPIC_BASE, slot.address.c_str());
+  if (!mqtt.publish(topic, payload, n)) {
     Serial.printf("[mqtt] publish failed (seq=%lu)\n",
                   (unsigned long)buffered.seq);
     return false;

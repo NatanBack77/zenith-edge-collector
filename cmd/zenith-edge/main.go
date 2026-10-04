@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -111,6 +112,7 @@ func runTest(args []string) {
 	fs := flag.NewFlagSet("test", flag.ExitOnError)
 	sensor := fs.String("sensor", "", "MAC address of the sensor to connect to")
 	raw := fs.Bool("raw", false, "print raw notification bytes as hex instead of decoded values")
+	noPoll := fs.Bool("no-poll", false, "never send register read commands (they are skipped automatically in Now data mode)")
 	fs.Parse(args)
 
 	if *sensor == "" {
@@ -128,12 +130,29 @@ func runTest(args []string) {
 
 	decoder := wtvb01.NewDecoder()
 
+	// In Now data mode the sensor sends ~100 samples/s; printing them all
+	// would flood the terminal, so show every 10th (10 lines/s).
+	samples := 0
+	decoder.OnInstant = func(s wtvb01.InstantSample) {
+		samples++
+		if samples%10 == 1 {
+			printInstant(s)
+		}
+	}
+
+	// Reading registers while the sensor streams Now data disturbs the
+	// sample stream (measured: 1 contiguous 256-sample window in 30 s at
+	// 5 reads/s, versus unbroken windows without reads), so the polling
+	// goroutine below stands down when the mode is Now data.
+	var instant atomic.Bool
+
 	err = client.Subscribe(func(data []byte) {
 		if *raw {
 			fmt.Printf("%s  %s\n", time.Now().Format("15:04:05.000"), hex.EncodeToString(data))
 			return
 		}
 		reading, ok := decoder.Feed(data)
+		instant.Store(decoder.Mode() == wtvb01.DataModeInstant)
 		if !ok {
 			return
 		}
@@ -150,6 +169,10 @@ func runTest(args []string) {
 	// read-backs.
 	go func() {
 		for {
+			if *noPoll || instant.Load() {
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
 			for _, cmd := range wtvb01.MeasurementBlockCommands() {
 				client.Send(cmd)
 				time.Sleep(100 * time.Millisecond)
@@ -163,13 +186,24 @@ func runTest(args []string) {
 
 func printReading(r wtvb01.SensorReading) {
 	fmt.Printf(
-		"[%s] angle(%.2f,%.2f,%.2f) vel(%.3f,%.3f,%.3f)mm/s disp(%.1f,%.1f,%.1f)um freq(%.1f,%.1f,%.1f)Hz temp=%.1fC power_raw=%.0f\n",
+		"[%s] angle(%.2f,%.2f,%.2f) vel(%.3f,%.3f,%.3f)mm/s disp(%.1f,%.1f,%.1f)um freq(%.1f,%.1f,%.1f)Hz temp=%.1fC bat=%.2fV(%.0f%%) alarm=%d\n",
 		r.Timestamp.Format("15:04:05.000"),
 		r.Angle.X, r.Angle.Y, r.Angle.Z,
 		r.Velocity.X, r.Velocity.Y, r.Velocity.Z,
 		r.Displacement.X, r.Displacement.Y, r.Displacement.Z,
 		r.Frequency.X, r.Frequency.Y, r.Frequency.Z,
 		r.Device.Temperature,
-		r.Device.PowerRaw,
+		r.Device.BatteryVolts, r.Device.BatteryPercent, r.Device.AlarmStatus,
+	)
+}
+
+// printInstant shows one Now data sample: chip clock, acceleration in g and
+// signed instantaneous velocity.
+func printInstant(s wtvb01.InstantSample) {
+	fmt.Printf(
+		"[%s] NOW DATA chip=%dms acc(%.3f,%.3f,%.3f)g vel(%.0f,%.0f,%.0f)mm/s\n",
+		time.Now().Format("15:04:05.000"), s.ChipMs,
+		s.Accel.X, s.Accel.Y, s.Accel.Z,
+		s.Velocity.X, s.Velocity.Y, s.Velocity.Z,
 	)
 }

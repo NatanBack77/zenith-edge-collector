@@ -126,6 +126,8 @@ func TestOutputAndRegisterPacketsAgree(t *testing.T) {
 		switch {
 		case pkt[1] == packetTypeOutput && !gotOutput:
 			d := NewDecoder()
+			// A lone packet has no following header to detect the length from.
+			d.SetExpectedOutputLen(outputPacketLen)
 			outputReading, gotOutput = d.Feed(pkt)
 		case pkt[1] == packetTypeRegister && pkt[2] == blockMeasurementA && !gotRegisterA:
 			d := NewDecoder()

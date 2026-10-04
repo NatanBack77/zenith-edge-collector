@@ -28,10 +28,12 @@ coletores **não estão no mesmo nível**:
   `zenith/waveform/<mac>`), bateria e alarme decodificados, e diagnóstico do
   nó (`zenith/node/<mac>`). Testado contra o sensor real: 23 janelas
   consecutivas em 60 s sem perda.
-- **CLI em Go (`cmd/zenith-edge`)** continua só com `scan` e `test`, e o
-  decoder dele **só conhece o pacote de 32 bytes** (modo Default). Ele precisa
-  do mesmo tratamento do firmware (pacote de 40 bytes, bateria) antes de ser
-  usado com o sensor em Now data.
+- **CLI em Go (`cmd/zenith-edge`)** continua só com `scan` e `test`, mas o
+  decoder (`internal/protocol/wtvb01`) agora tem **a mesma lógica do firmware**:
+  detecta o pacote de 32 ou 40 bytes pelo fluxo, entrega as amostras Now data
+  por `OnInstant`, decodifica bateria e alarme, e é testado contra os mesmos
+  bytes reais capturados. O `zenith-edge test` mostra as amostras Now data e
+  não lê registradores nesse modo (isso perturba a onda).
 
 O formato dos pacotes, o registrador que troca o modo (`0x96`, que não consta
 no manual) e as medições estão em [docs/protocol.md](docs/protocol.md) §9.

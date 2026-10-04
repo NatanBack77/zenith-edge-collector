@@ -201,6 +201,8 @@ Decisões de desempenho:
   para não escanear nunca.
 - **Boot sem esperar redes ausentes**: o nó só tenta as redes WiFi que o scan
   viu (antes, cada rede configurada e ausente custava ~8 s).
+- **Sem `String` a cada publicação** (tópico em buffer fixo): o `zenith/readings` roda ~5×/s por horas e uma
+  `String` alocada e liberada a cada chamada é fonte de fragmentação do heap.
 - A FFT (3 × 256 pontos) roda no `loop()`, não na task do BLE, para não
   atrasar notificações.
 - **Não mexi no modo de economia do WiFi**: a pesquisa que fiz sobre

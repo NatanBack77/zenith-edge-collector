@@ -103,8 +103,9 @@ escolhe o tamanho pelo tipo (`packetLenFor`).
 > de tipo: **32 bytes** (modo Default) e **40 bytes** (modo "Now data",
 > §9). O decoder do firmware ESP32 descobre o tamanho pelo fluxo (procura
 > o próximo cabeçalho `55 61`/`55 71` a 32 ou 40 bytes). O decoder Go
-> (`internal/protocol/wtvb01`) **ainda só conhece 32 bytes** e precisa do
-> mesmo tratamento antes de ser usado com o sensor em Now data.
+> (`internal/protocol/wtvb01`) tem a mesma lógica (verificação do cabeçalho
+> seguinte a 32 e a 40 bytes, e se corrige se o modo mudar), testada contra os
+> mesmos bytes capturados que o firmware.
 
 O layout do `0x71` bate com o SDK e com o manual oficial:
 `0x55 0x71 <registrador inicial, 2 bytes LE> <16 bytes = 8 registradores, LE>`.

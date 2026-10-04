@@ -23,14 +23,59 @@ type DeviceInfo struct {
 	// dominated by conduction through the mount, and it lags.
 	Temperature float64 `json:"temperature"`
 
-	// PowerRaw is value 14 (bytes 30-31) of the 0x61 broadcast: a
-	// slowly-drifting counter with no documented register address. The
-	// WitMotion app shows a "Power Percent(%)" field this may feed, but
-	// that is UNCONFIRMED — observed values (e.g. 418) are well outside
-	// 0-100, so this is exposed raw rather than as a percentage. Track
-	// it across a real charge/discharge cycle to find the mapping. See
-	// docs/protocol.md §5/§8.
+	// PowerRaw is the battery register 0x64 ("BatPer" in the manual), also
+	// the last int16 (bytes 30-31) of the Default 0x61 packet, in
+	// centivolts. CONFIRMED on hardware: the packet value matched the 0x64
+	// read-back (437..441 vs 439). The name is kept for the existing JSON
+	// schema, which the ESP32 firmware also publishes.
 	PowerRaw float64 `json:"power_raw"`
+
+	// BatteryVolts is PowerRaw / 100, and BatteryPercent comes from the
+	// official app's piecewise-linear table (BatteryPercentFromVolts).
+	BatteryVolts   float64 `json:"battery_v"`
+	BatteryPercent float64 `json:"battery_pct"`
+
+	// AlarmStatus is the sensor's embedded alarm flags (manual §5.2.8):
+	// bits 0-2 displacement alarm X/Y/Z, bits 3-5 frequency alarm X/Y/Z.
+	// 0 means no alarm. It was 0 in all 4868 Default packets captured.
+	AlarmStatus int `json:"alarm"`
+}
+
+// DataMode is which 0x61 format the sensor is currently sending.
+type DataMode uint8
+
+const (
+	// DataModeUnknown means no 0x61 packet has been decoded yet.
+	DataModeUnknown DataMode = iota
+	// DataModeDefault is the 32-byte packet: amplitudes (always positive),
+	// frequency, temperature, battery.
+	DataModeDefault
+	// DataModeInstant ("Now data") is the 40-byte packet: chip time,
+	// acceleration, gyro and signed instantaneous velocity/angle/
+	// displacement. Selected with register 0x96 (1 = Now data, 0 = Default);
+	// that register is NOT in the V260410 manual, it was found by capturing
+	// the official app. See docs/protocol.md §9.
+	DataModeInstant
+)
+
+// InstantSample is one decoded 40-byte "Now data" packet. The values are
+// signed instantaneous values, not amplitudes.
+type InstantSample struct {
+	// Year is two digits (15 == 2015) and ChipMs folds day/hour/minute/
+	// second/millisecond into one monotonic counter. Without time
+	// calibration the chip clock starts at 2015-01-01 00:00:00 on power-up,
+	// so only differences between samples are meaningful.
+	Year, Month, Day, Hour, Minute, Second uint8
+	Millisecond                            uint16
+	ChipMs                                 uint32
+
+	AccelRaw [3]int16 // counts; multiply by AccelScaleG for g
+	Accel    Vector3  // g
+	Gyro     Vector3  // deg/s
+	Velocity Vector3  // mm/s, signed
+	Angle    Vector3  // degrees, signed
+
+	Displacement Vector3 // micrometres, signed
 }
 
 // SensorReading is the normalized, decoded output of a WTVB01-BT50
