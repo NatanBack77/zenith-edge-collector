@@ -420,6 +420,13 @@ void TestInstantStats() {
   Check(std::fabs(r.velocity.x - 70.71f) < 3.0f, "X RMS ~ 100/sqrt(2)");
   Check(std::fabs(r.velocity.y - 5.0f) < 0.1f, "constant 5 has RMS 5");
   Check(r.velocity.z == 0.0f, "silent axis has RMS 0");
+
+  // After the signal stops, the RMS decays to exactly 0 (no 1e-19 leftovers).
+  for (int i = 400; i < 3000; i++) {
+    st.Add(MakeSample(1000 + i * 10, 0));
+  }
+  Check(st.Rms(&r) && r.velocity.x == 0.0f && r.velocity.y == 0.0f,
+        "RMS reaches exactly 0 after the signal stops");
 }
 
 void TestDominantFrequencies() {
@@ -447,6 +454,22 @@ void TestDominantFrequencies() {
       Check(std::fabs(out[1] - 2.0f * c.f) < 0.3f, label);
     }
     Check(out[2] == 0.0f, "constant axis reports 0 Hz");
+  }
+  // Resting noise (a few counts) is not a signal: 0 Hz, not a noise peak.
+  {
+    wtvb01::WaveformWindow quiet;
+    unsigned seed = 12345;
+    for (int i = 0; i < WAVEFORM_WINDOW_SAMPLES; i++) {
+      seed = seed * 1103515245u + 12345u;
+      quiet.ax[i] = static_cast<int16_t>((seed >> 16) % 5) - 2;  // -2..+2 counts
+      quiet.ay[i] = static_cast<int16_t>(2048 + ((seed >> 20) % 5) - 2);
+      quiet.az[i] = static_cast<int16_t>(-64 + ((seed >> 24) % 3) - 1);
+    }
+    quiet.count = WAVEFORM_WINDOW_SAMPLES;
+    float q[3] = {9, 9, 9};
+    wtvb01::DominantFrequencies(quiet, 100.0f, q);
+    Check(q[0] == 0.0f && q[1] == 0.0f && q[2] == 0.0f,
+          "noise below kMinSignalRmsCounts reports 0 Hz");
   }
   // An incomplete window yields nothing.
   wtvb01::WaveformWindow partial;

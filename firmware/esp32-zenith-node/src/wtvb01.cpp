@@ -459,6 +459,9 @@ void InstantStats::Add(const InstantSample &s) {
   for (int i = 0; i < 9; i++) {
     const float sq = x[i] * x[i];
     mean_sq_[i] = count_ == 0 ? sq : mean_sq_[i] + alpha * (sq - mean_sq_[i]);
+    if (mean_sq_[i] < kSilenceFloor) {
+      mean_sq_[i] = 0.0f;
+    }
   }
   last_ms_ = s.chip_ms;
   count_++;
@@ -552,6 +555,14 @@ void DominantFrequencies(const WaveformWindow &w, float fs_hz,
       mean += axes[a][i];
     }
     mean /= static_cast<float>(kFftN);
+    float sum_sq = 0.0f;
+    for (size_t i = 0; i < kFftN; i++) {
+      const float d = axes[a][i] - mean;
+      sum_sq += d * d;
+    }
+    if (sqrtf(sum_sq / static_cast<float>(kFftN)) < kMinSignalRmsCounts) {
+      continue;  // resting noise: no meaningful dominant frequency
+    }
     for (size_t i = 0; i < kFftN; i++) {
       const float hann = 0.5f * (1.0f - cosf(2.0f * static_cast<float>(M_PI) *
                                              static_cast<float>(i) /

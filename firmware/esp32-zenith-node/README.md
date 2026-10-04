@@ -48,8 +48,15 @@ produz:
   calcula); tratar como "RMS do sinal instantâneo".
 - **frequency**: frequência dominante de cada janela de 256 amostras, por FFT
   com janela de Hann e interpolação parabólica (≥ 5 Hz; resolução 0,39 Hz).
+  Um eixo cuja aceleração (sem a média) tem RMS abaixo de ~0,005 g (10
+  contagens) reporta **0 Hz**, em vez de um pico de ruído: com o sensor
+  parado o ruído medido é 0,0012–0,0016 g RMS nos três eixos.
 - **temperature / battery**: lidos do sensor a cada `SENSOR_STATUS_POLL_MS`
   (30 s), porque não vêm no pacote Now data.
+
+Com a máquina parada, velocity/displacement/angle chegam **exatamente 0** (o
+RMS suavizado decai e é zerado abaixo de um piso de silêncio; as entradas são
+inteiros, então um quadrado médio < 1e-3 é silêncio, não sinal).
 
 Cada mensagem traz `"mode":"instant"` (ou `"default"`).
 
@@ -227,6 +234,9 @@ casa em minúsculas com o MAC do sensor.
 ou recusou conexões do ESP32 nos testes, mesmo alcançável do PC. Use um
 broker próprio (há um Mosquitto com autenticação no `docker-compose.yml` do
 repositório Zenith, em `infra/mosquitto`).
+
+**`device.rssi` = -127.** Valor transitório logo depois de (re)conectar, antes
+de o NimBLE medir; estabiliza em segundos (medido -54 a -70 dBm a ~1 m).
 
 **Monitoramento parou depois de ligar o Now data.** O app lê o
 `zenith/readings`; confira que o nó está publicando `"mode":"instant"` e que

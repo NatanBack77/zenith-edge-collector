@@ -355,6 +355,10 @@ class InstantStats {
  private:
   static constexpr uint32_t kMinSamples = 20;
   static constexpr float kTimeConstantMs = 1000.0f;
+  // The inputs are integers (mm/s, um, counts), so a mean square below this
+  // is silence, not signal. Without the floor the exponential decay never
+  // reaches zero and a stopped machine publishes values like 1e-19.
+  static constexpr float kSilenceFloor = 1e-3f;
 
   float mean_sq_[9] = {};  // vel xyz, disp xyz, angle xyz
   uint32_t last_ms_ = 0;
@@ -365,9 +369,15 @@ class InstantStats {
 // Hann-windowed FFT with parabolic peak interpolation. The DC bin and
 // everything below kMinDominantHz are ignored (the sensor's own frequency
 // register is documented as 5-100 Hz). `fs_hz` is the window's sample rate
-// (WaveformWindow::SampleRateHz()). Writes 0 for an axis with no signal.
+// (WaveformWindow::SampleRateHz()). Writes 0 for an axis with no signal
+// (AC RMS below kMinSignalRmsCounts).
 // Uses static scratch memory: call it from one task only.
 constexpr float kMinDominantHz = 5.0f;
+// An axis whose AC RMS is below this many counts has no signal worth a
+// frequency: DominantFrequencies reports 0 instead of a noise peak. 10 counts
+// is ~0.005 g, about 3x the noise measured with the sensor resting on a desk
+// (0.0012-0.0016 g RMS on all three axes).
+constexpr float kMinSignalRmsCounts = 10.0f;
 void DominantFrequencies(const WaveformWindow &window, float fs_hz,
                          float out_xyz[3]);
 
