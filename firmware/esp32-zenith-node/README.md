@@ -164,6 +164,15 @@ do MQTT (são grandes demais); contam em `unsent`.
 Decodificar e ver o espectro: `python3 tools/waveform_listen.py --user ...`
 (precisa de `paho-mqtt`; com `numpy` mostra RMS e pico de FFT por eixo).
 
+### `zenith/node/<mac-wifi-do-esp32>` (JSON retido, a cada 60 s)
+
+Saúde do nó: `reset_reason` (`power-on`, `software`, `PANIC`, `task-watchdog`, `BROWNOUT`...),
+`uptime_ms`, `heap_free`, `heap_min` e `wifi_rssi`. Serve para distinguir um reinício espontâneo
+(crash, watchdog, queda de tensão) de alguém ter desligado o cabo: depois de uma sessão, um
+`reset_reason` diferente de `power-on` ou um `uptime_ms` menor que o esperado significa que o nó
+reiniciou. Visto em 4 out 2026 (5 min depois de gravar): `power-on`, `heap_free` 87 KB,
+`heap_min` 74 KB. A mesma linha vai para a serial como `[sys] ...`.
+
 ### `zenith/status`
 
 Valor retido `online`/`offline`, com `offline` configurado como last will do

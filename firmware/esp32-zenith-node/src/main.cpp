@@ -20,6 +20,7 @@
 #include <NimBLEDevice.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include <esp_system.h>
 
 #include "config.h"
 #include "wtvb01.h"
@@ -462,6 +463,55 @@ void EnsureSensors() {
     Serial.println("      are they powered on, and not held by the phone app?");
   }
   scan->clearResults();
+}
+
+// ------------------------------------------------------------ node health
+//
+// Why the node last restarted and how much heap it has left, on the serial
+// port and retained on MQTT (zenith/node/<wifi-mac>), so a spontaneous reboot
+// (panic, watchdog, brownout) can be told apart from someone unplugging it.
+
+const char *ResetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external-pin";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "PANIC";
+    case ESP_RST_INT_WDT: return "interrupt-watchdog";
+    case ESP_RST_TASK_WDT: return "task-watchdog";
+    case ESP_RST_WDT: return "other-watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+  }
+}
+
+constexpr uint32_t kNodeDiagIntervalMs = 60000;
+
+void PublishNodeDiag() {
+  static uint32_t last_ms = 0;
+  if (last_ms != 0 && millis() - last_ms < kNodeDiagIntervalMs) {
+    return;
+  }
+  last_ms = millis();
+  if (!mqtt.connected()) {
+    return;
+  }
+  char payload[200];
+  const int n = snprintf(
+      payload, sizeof(payload),
+      "{\"reset_reason\":\"%s\",\"uptime_ms\":%lu,\"heap_free\":%u,"
+      "\"heap_min\":%u,\"wifi_rssi\":%d}",
+      ResetReasonName(esp_reset_reason()), (unsigned long)millis(),
+      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+      (int)WiFi.RSSI());
+  const String topic = String("zenith/node/") + WiFi.macAddress();
+  mqtt.publish(topic.c_str(), reinterpret_cast<const uint8_t *>(payload), n, true);
+  Serial.printf("[sys] up=%lus heap=%u min=%u reset=%s\n",
+                (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMinFreeHeap(),
+                ResetReasonName(esp_reset_reason()));
 }
 
 // --------------------------------------------------------- WiFi / MQTT
@@ -918,6 +968,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println("\nZenith Edge node starting");
+  Serial.printf("[boot] reset reason: %s\n", ResetReasonName(esp_reset_reason()));
 
   NimBLEDevice::init("zenith-edge-node");
   // The sensor is a low-power peripheral; boosting TX power helps at
@@ -952,6 +1003,7 @@ void setup() {
 void loop() {
   if (EnsureWiFi() && EnsureMQTT()) {
     mqtt.loop();
+    PublishNodeDiag();
   }
 
   EnsureSensors();
