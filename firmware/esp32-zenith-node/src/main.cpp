@@ -2,8 +2,18 @@
 // publishes normalized readings to MQTT.
 //
 // The sensor broadcasts every measurement register in its 0x61 packet
-// without being asked, so this node never writes to the sensor: it
-// scans, connects, subscribes to the notify characteristic, and parses.
+// without being asked, so by default this node never writes to the
+// sensor: it scans, connects, subscribes to the notify characteristic,
+// and parses. Two opt-in writes exist (SENSOR_CONFIGURE_RATE and
+// SENSOR_CONFIGURE_DATA_MODE in config.h), both off by default.
+//
+// The sensor has two data modes (see docs/protocol.md and the Zenith
+// repo's docs/sensor-wtvb01-bt50.md):
+//   - Default: ~100 packets/s of amplitudes. The node keeps the latest
+//     one and publishes it every PUBLISH_INTERVAL_MS on zenith/readings.
+//   - "Now data": ~100 packets/s of raw acceleration with a chip
+//     timestamp. Nothing is dropped: samples are gathered into gap-free
+//     windows and published on zenith/waveform for FFT downstream.
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -14,9 +24,53 @@
 #include "config.h"
 #include "wtvb01.h"
 
+// Settings added after the first config.h templates went out: defaulted
+// here so an older src/config.h keeps compiling. See config.example.h.
+#ifndef WAVEFORM_ENABLE
+#define WAVEFORM_ENABLE 1
+#endif
+#ifndef MQTT_TOPIC_WAVEFORM_BASE
+#define MQTT_TOPIC_WAVEFORM_BASE "zenith/waveform"
+#endif
+#ifndef SENSOR_CONFIGURE_RATE
+#define SENSOR_CONFIGURE_RATE 0
+#endif
+#ifndef SENSOR_RATE_CODE
+#define SENSOR_RATE_CODE 0x09
+#endif
+#ifndef SENSOR_CONFIGURE_DATA_MODE
+#define SENSOR_CONFIGURE_DATA_MODE 0
+#endif
+#ifndef SENSOR_DATA_MODE_INSTANT
+#define SENSOR_DATA_MODE_INSTANT 1
+#endif
+// In "Now data" mode the sensor stops broadcasting the Default packet
+// (amplitudes, frequency, temperature, battery). zenith/readings keeps its
+// fields anyway:
+//   - velocity / displacement / angle: smoothed RMS of the signed samples,
+//     computed on the node (wtvb01::InstantStats);
+//   - frequency: dominant frequency of each waveform window (FFT);
+//   - temperature / battery: read from the sensor every
+//     SENSOR_STATUS_POLL_MS (they are not in the Now data packet).
+// Reading registers more often than that disturbs the 100 samples/s
+// stream and makes waveform windows restart (measured on hardware), so the
+// poll is deliberately rare. 0 disables it (temperature and battery then
+// stay 0 in Now data mode).
+#ifndef SENSOR_STATUS_POLL_MS
+#define SENSOR_STATUS_POLL_MS 30000
+#endif
+
 namespace {
 
 constexpr uint32_t kScanDurationSec = 10;
+// A BLE scan blocks loop() for its whole duration, which stalls sampling
+// and publishing for every connected sensor. Once at least one slot is
+// streaming, a still-empty slot (auto mode has MAX_AUTO_SENSORS slots, so
+// one sensor in range leaves one empty) is only retried this rarely, and
+// with a shorter scan. Pin the sensor in SENSOR_ADDRESSES (and keep the
+// list as long as the sensors you own) to avoid scanning altogether.
+constexpr uint32_t kRescanWhileStreamingMs = 300000;
+constexpr uint32_t kScanWhileStreamingSec = 4;
 constexpr uint32_t kReconnectDelayMs = 3000;
 // Minimum gap between WiFi / MQTT reconnect rounds. Keeps a missing
 // network from stalling BLE sampling on every loop() pass.
@@ -45,6 +99,7 @@ constexpr size_t kMaxSensors =
 
 struct BufferedReading {
   wtvb01::SensorReading reading;
+  bool instant_mode = false;  // sensor was in Now data mode (values polled)
   uint32_t seq = 0;
   uint32_t captured_ms = 0;
 };
@@ -65,6 +120,27 @@ struct SensorSlot {
   portMUX_TYPE reading_mux = portMUX_INITIALIZER_UNLOCKED;
   wtvb01::SensorReading latest_reading;
 
+  // "Now data" waveform path. The BLE task fills `waveform` through the
+  // decoder's sink; when a window completes it is copied into wf_ready
+  // under wf_mux and published from loop(). A single pending window is
+  // kept: if loop() has not published the previous one yet, the new one
+  // is dropped and counted, never queued (windows are too big to buffer
+  // through an MQTT outage).
+  NimBLERemoteCharacteristic *write_char = nullptr;  // ffe9, may be null
+  // Now data mode: derived readings and the rare status poll.
+  wtvb01::InstantStats stats;    // BLE task adds, loop() reads (wf_mux)
+  float derived_freq[3] = {0, 0, 0};  // loop() only: FFT of the last window
+  uint32_t last_status_poll_ms = 0;
+  uint8_t status_poll_stage = 0;  // 0 idle, 1 = battery read still to send
+
+  wtvb01::WaveformAccumulator waveform;
+  portMUX_TYPE wf_mux = portMUX_INITIALIZER_UNLOCKED;
+  volatile bool wf_pending = false;
+  wtvb01::WaveformWindow wf_ready;
+  uint32_t wf_seq = 0;
+  uint32_t wf_dropped = 0;  // loop() was still busy with the previous window
+  uint32_t wf_unsent = 0;   // MQTT was down or the publish failed
+
   BufferedReading reading_buffer[READING_BUFFER_CAPACITY];
   size_t buffer_head = 0;   // index of the oldest buffered sample
   size_t buffer_count = 0;  // how many entries are in use
@@ -76,6 +152,53 @@ struct SensorSlot {
 SensorSlot sensors[kMaxSensors];
 
 // ---------------------------------------------------------------- BLE
+
+// Runs on the BLE task, once per "Now data" packet, in stream order.
+void OnInstantSample(const wtvb01::InstantSample &sample, void *ctx) {
+  SensorSlot *slot = static_cast<SensorSlot *>(ctx);
+
+  portENTER_CRITICAL(&slot->wf_mux);
+  slot->stats.Add(sample);
+  portEXIT_CRITICAL(&slot->wf_mux);
+
+#if WAVEFORM_ENABLE
+  if (!slot->waveform.Push(sample)) {
+    return;
+  }
+  portENTER_CRITICAL(&slot->wf_mux);
+  if (slot->wf_pending) {
+    slot->wf_dropped++;
+  } else {
+    slot->wf_ready = slot->waveform.window();
+    slot->wf_pending = true;
+  }
+  portEXIT_CRITICAL(&slot->wf_mux);
+#endif
+}
+
+#if SENSOR_CONFIGURE_RATE || SENSOR_CONFIGURE_DATA_MODE
+// Sends unlock -> write -> save the way the official app does, with
+// kCommandSpacingMs between commands (the manual does not mention the
+// delay; it was observed on the wire). The writes persist in the sensor.
+bool WriteSensorRegister(NimBLERemoteCharacteristic *write_char, uint8_t reg,
+                         uint16_t value) {
+  uint8_t cmd[wtvb01::kCommandLen];
+  bool ok = true;
+
+  wtvb01::BuildWriteRegisterCommand(wtvb01::kRegUnlock, wtvb01::kUnlockValue,
+                                    cmd);
+  ok &= write_char->writeValue(cmd, sizeof(cmd), false);
+  delay(wtvb01::kCommandSpacingMs);
+
+  wtvb01::BuildWriteRegisterCommand(reg, value, cmd);
+  ok &= write_char->writeValue(cmd, sizeof(cmd), false);
+  delay(wtvb01::kCommandSpacingMs);
+
+  wtvb01::BuildWriteRegisterCommand(wtvb01::kRegSave, 0x0000, cmd);
+  ok &= write_char->writeValue(cmd, sizeof(cmd), false);
+  return ok;
+}
+#endif  // SENSOR_CONFIGURE_RATE || SENSOR_CONFIGURE_DATA_MODE
 
 void OnNotify(NimBLERemoteCharacteristic *chr, uint8_t *data, size_t len,
               bool) {
@@ -190,6 +313,14 @@ bool ConnectSlot(SensorSlot &slot, size_t index) {
     return false;
   }
 
+  // Fresh stream state for this (re)connection: drop any half packet
+  // left over from the previous link.
+  slot.decoder = wtvb01::Decoder();
+  slot.decoder.SetInstantSink(OnInstantSample, &slot);
+  slot.stats.Reset();
+  slot.waveform.Reset();
+  slot.wf_pending = false;
+
   NimBLERemoteService *service =
       slot.client->getService(NimBLEUUID(wtvb01::kServiceUUID));
   if (service == nullptr) {
@@ -213,41 +344,69 @@ bool ConnectSlot(SensorSlot &slot, size_t index) {
     return false;
   }
 
+  slot.write_char =
+      service->getCharacteristic(NimBLEUUID(wtvb01::kWriteCharUUID));
+  if (slot.write_char != nullptr && !slot.write_char->canWrite()) {
+    slot.write_char = nullptr;
+  }
+
+#if SENSOR_CONFIGURE_RATE || SENSOR_CONFIGURE_DATA_MODE
+  // Optional writes, off by default -- see config.example.h. They run
+  // once per (re)connect; a failure does not disconnect the slot, since
+  // the sensor keeps streaming with whatever it already has.
+  if (slot.write_char == nullptr) {
+    Serial.printf(
+        "[ble] slot %u write characteristic ffe9 unavailable -- sensor "
+        "configuration left unchanged\n",
+        (unsigned)index);
+  } else {
 #if SENSOR_CONFIGURE_RATE
-  // Optional, off by default -- see config.example.h for why. Runs once
-  // per (re)connect; failure here does not disconnect the slot, since
-  // the sensor keeps streaming at whatever rate it already has.
-  {
-    NimBLERemoteCharacteristic *write_char =
-        service->getCharacteristic(NimBLEUUID(wtvb01::kWriteCharUUID));
-    if (write_char == nullptr || !write_char->canWrite()) {
-      Serial.printf(
-          "[ble] slot %u write characteristic ffe9 unavailable -- output "
-          "rate left unchanged\n",
-          (unsigned)index);
-    } else {
-      uint8_t cmd[wtvb01::kCommandLen];
-      wtvb01::BuildWriteRegisterCommand(wtvb01::kRegUnlock,
-                                         wtvb01::kUnlockValue, cmd);
-      write_char->writeValue(cmd, sizeof(cmd), false);
+    const bool rate_ok = WriteSensorRegister(
+        slot.write_char, wtvb01::kRegRate, static_cast<uint16_t>(SENSOR_RATE_CODE));
+    Serial.printf(
+        "[ble] slot %u requested output rate code 0x%02X (%s) -- verify the "
+        "packet cadence actually changed before trusting this\n",
+        (unsigned)index, SENSOR_RATE_CODE, rate_ok ? "sent" : "write failed");
+#endif
+#if SENSOR_CONFIGURE_DATA_MODE
+    // Only write when the sensor is not already in the wanted mode: every
+    // write ends with a "save", and there is no reason to wear the
+    // sensor's flash on each reconnect. The mode shows up in the packet
+    // size within a notification or two.
+    const wtvb01::DataMode wanted = SENSOR_DATA_MODE_INSTANT
+                                        ? wtvb01::DataMode::kInstant
+                                        : wtvb01::DataMode::kDefault;
+    for (int i = 0; i < 30 && slot.decoder.mode() == wtvb01::DataMode::kUnknown; i++) {
       delay(50);
-      wtvb01::BuildWriteRegisterCommand(
-          wtvb01::kRegRate, static_cast<uint16_t>(SENSOR_RATE_CODE), cmd);
-      write_char->writeValue(cmd, sizeof(cmd), false);
-      delay(50);
-      wtvb01::BuildWriteRegisterCommand(wtvb01::kRegSave, 0x0000, cmd);
-      write_char->writeValue(cmd, sizeof(cmd), false);
-      Serial.printf(
-          "[ble] slot %u requested output rate code 0x%02X -- verify the "
-          "notify cadence actually changed before trusting this\n",
-          (unsigned)index, SENSOR_RATE_CODE);
     }
+    if (slot.decoder.mode() == wanted) {
+      Serial.printf("[ble] slot %u already in the wanted data mode; no write\n",
+                    (unsigned)index);
+    } else {
+      const uint16_t mode = SENSOR_DATA_MODE_INSTANT ? wtvb01::kDataModeInstant
+                                                     : wtvb01::kDataModeDefault;
+      const bool mode_ok =
+          WriteSensorRegister(slot.write_char, wtvb01::kRegDataMode, mode);
+      // The sensor starts sending the new packet size right away; tell the
+      // decoder so it does not wait to detect it. A wrong hint corrects
+      // itself.
+      slot.decoder.SetExpectedOutputLength(SENSOR_DATA_MODE_INSTANT
+                                               ? wtvb01::kInstantPacketLen
+                                               : wtvb01::kOutputPacketLen);
+      Serial.printf(
+          "[ble] slot %u data mode register 0x%02X <- %u (%s, persists in the "
+          "sensor)\n",
+          (unsigned)index, wtvb01::kRegDataMode, (unsigned)mode,
+          mode_ok ? "sent" : "write failed");
+    }
+#endif
   }
 #endif
 
   slot.address = slot.client->getPeerAddress().toString().c_str();
-  Serial.printf("[ble] slot %u streaming from %s\n", (unsigned)index,
-                slot.address.c_str());
+  Serial.printf("[ble] slot %u streaming from %s (ATT MTU %u)\n",
+                (unsigned)index, slot.address.c_str(),
+                (unsigned)slot.client->getMTU());
   return true;
 }
 
@@ -265,11 +424,31 @@ void EnsureSensors() {
     return;
   }
 
+  // Throttle rescans while something is already streaming (see
+  // kRescanWhileStreamingMs): a scan would stall the live sensor's feed.
+  static uint32_t last_scan_ms = 0;
+  static bool scanned_once = false;
+  bool any_connected = false;
+  for (size_t i = 0; i < kMaxSensors; i++) {
+    if (sensors[i].client != nullptr && sensors[i].client->isConnected()) {
+      any_connected = true;
+      break;
+    }
+  }
+  if (any_connected && scanned_once &&
+      millis() - last_scan_ms < kRescanWhileStreamingMs) {
+    return;
+  }
+
   Serial.println("[ble] scanning...");
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setScanCallbacks(&scan_callbacks, false);
   scan->setActiveScan(true);
-  scan->getResults(kScanDurationSec * 1000, false);
+  scan->getResults(
+      (any_connected ? kScanWhileStreamingSec : kScanDurationSec) * 1000,
+      false);
+  scanned_once = true;
+  last_scan_ms = millis();
 
   bool any_found = false;
   for (size_t i = 0; i < kMaxSensors; i++) {
@@ -290,8 +469,17 @@ void EnsureSensors() {
 // Diagnostic: scans and logs every network the radio can actually see,
 // flagging which ones match an entry in WIFI_NETWORKS. Helps tell apart
 // "AP out of range" from "AP visible but rejects the connection".
+// Which entries of WIFI_NETWORKS the last scan actually saw. EnsureWiFi uses
+// it to skip networks that are out of range instead of waiting
+// WIFI_TRY_TIMEOUT_MS on each of them (a configured-but-absent hotspot cost
+// ~8 s of boot time per entry).
+bool network_visible[WIFI_NETWORKS_COUNT];
+
 void LogVisibleNetworks() {
   Serial.println("[wifi] scanning...");
+  for (size_t j = 0; j < WIFI_NETWORKS_COUNT; j++) {
+    network_visible[j] = false;
+  }
   const int count = WiFi.scanNetworks();
   if (count <= 0) {
     Serial.println("[wifi] scan found nothing");
@@ -302,6 +490,7 @@ void LogVisibleNetworks() {
     for (size_t j = 0; j < WIFI_NETWORKS_COUNT; j++) {
       if (WiFi.SSID(i) == WIFI_NETWORKS[j].ssid) {
         known = true;
+        network_visible[j] = true;
         break;
       }
     }
@@ -359,8 +548,18 @@ bool EnsureWiFi() {
 
   WiFi.mode(WIFI_STA);
   LogVisibleNetworks();
+  // Only try networks the scan saw. If it saw none of them (a hidden SSID
+  // does not show up in scans, or the scan failed), fall back to trying
+  // every entry in order.
+  bool any_visible = false;
+  for (size_t j = 0; j < WIFI_NETWORKS_COUNT; j++) {
+    any_visible = any_visible || network_visible[j];
+  }
   for (size_t k = 0; k < WIFI_NETWORKS_COUNT; k++) {
     const size_t i = (last_good_network + k) % WIFI_NETWORKS_COUNT;
+    if (any_visible && !network_visible[i]) {
+      continue;
+    }
     if (TryWiFiNetwork(WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].password)) {
       last_good_network = i;
       return true;
@@ -424,6 +623,9 @@ bool PublishReading(SensorSlot &slot, const BufferedReading &buffered) {
   doc["seq"] = buffered.seq;
   doc["uptime_ms"] = buffered.captured_ms;
   doc["published_at_ms"] = millis();
+  // Default-mode amplitudes. "Now data" samples are not published here:
+  // they go to MQTT_TOPIC_WAVEFORM_BASE (see PublishWaveformIfReady).
+  doc["mode"] = buffered.instant_mode ? "instant" : "default";
 
   JsonObject velocity = doc["velocity"].to<JsonObject>();
   velocity["x"] = r.velocity.x;
@@ -448,10 +650,16 @@ bool PublishReading(SensorSlot &slot, const BufferedReading &buffered) {
   // Module temperature, not the machine's. See docs/indicators.md.
   JsonObject device = doc["device"].to<JsonObject>();
   device["temperature"] = r.device.temperature;
+  // power_raw is the battery register 0x64 (centivolts), kept under its
+  // old name for existing consumers; battery_v / battery_pct are derived
+  // with the official app's table.
   device["power_raw"] = r.device.power_raw;
+  device["battery_v"] = r.device.battery_volts;
+  device["battery_pct"] = r.device.battery_percent;
+  device["alarm"] = r.device.alarm_status;
   device["rssi"] = slot.client != nullptr ? slot.client->getRssi() : 0;
 
-  char payload[512];
+  char payload[640];
   const size_t n = serializeJson(doc, payload, sizeof(payload));
 
   const String topic = String(MQTT_TOPIC_BASE) + "/" + slot.address;
@@ -463,12 +671,157 @@ bool PublishReading(SensorSlot &slot, const BufferedReading &buffered) {
 
   Serial.printf(
       "seq=%lu vel(%.1f,%.1f,%.1f)mm/s disp(%.0f,%.0f,%.0f)um "
-      "freq(%.0f,%.0f,%.0f)Hz temp=%.1fC power_raw=%.0f\n",
+      "freq(%.0f,%.0f,%.0f)Hz temp=%.1fC bat=%.2fV(%.0f%%)\n",
       (unsigned long)buffered.seq, r.velocity.x, r.velocity.y, r.velocity.z,
       r.displacement.x, r.displacement.y, r.displacement.z, r.frequency.x,
-      r.frequency.y, r.frequency.z, r.device.temperature, r.device.power_raw);
+      r.frequency.y, r.frequency.z, r.device.temperature,
+      r.device.battery_volts, r.device.battery_percent);
   return true;
 }
+
+#if WAVEFORM_ENABLE
+// Binary waveform frame, little-endian (the ESP32 and the consumers we use
+// are all little-endian, so fields are copied as they are). 48-byte header
+// followed by three int16 blocks of `n` samples each: ax[n], ay[n], az[n].
+// Raw sensor counts, so nothing is lost to rounding; multiply by
+// g_per_count for g. The sensor MAC is the last topic level. Versus JSON
+// this is ~3.4x smaller (1584 B vs ~5.4 KB for 256 samples) and costs only
+// memcpy on the ESP32.
+#pragma pack(push, 1)
+struct WaveformFrameHeader {
+  char magic[4];  // "ZWF1" (format version in the last byte)
+  uint16_t n;     // samples per axis
+  uint8_t axes;   // 3
+  uint8_t reserved;
+  uint32_t seq;            // per-sensor frame counter
+  uint32_t chip_start_ms;  // sensor chip clock of the first sample
+  uint32_t chip_end_ms;    // ... of the last sample
+  uint32_t gaps;           // gaps that forced this window to restart
+  uint32_t dropped;        // windows lost: loop() was still busy (total)
+  uint32_t unsent;         // windows lost: MQTT down / publish failed (total)
+  float fs_hz;             // sample rate implied by the chip clock
+  float g_per_count;       // acceleration scale: g = count * g_per_count
+  uint32_t uptime_ms;      // ESP32 millis() when the frame was built
+  uint32_t published_at_ms;
+};
+#pragma pack(pop)
+static_assert(sizeof(WaveformFrameHeader) == 48, "waveform header layout");
+
+constexpr size_t kWaveformFrameBytes =
+    sizeof(WaveformFrameHeader) + 3 * sizeof(int16_t) * WAVEFORM_WINDOW_SAMPLES;
+// The MQTT client buffer must also hold the topic and the MQTT header.
+constexpr size_t kMqttBufferBytes = kWaveformFrameBytes + 160;
+
+uint8_t waveform_frame[kWaveformFrameBytes];
+// Only loop() touches this copy, so every slot can share it.
+wtvb01::WaveformWindow waveform_local;
+
+// Publishes the window the BLE task completed, if any. A window is only
+// worth its FFT if it is contiguous, so it is never buffered through an
+// outage: if MQTT is down the window is counted in wf_unsent and dropped.
+void PublishWaveformIfReady(SensorSlot &slot) {
+  if (!slot.wf_pending) {
+    return;
+  }
+  portENTER_CRITICAL(&slot.wf_mux);
+  waveform_local = slot.wf_ready;
+  slot.wf_pending = false;
+  portEXIT_CRITICAL(&slot.wf_mux);
+
+  // Dominant frequency per axis for zenith/readings' `frequency`, from the
+  // same window that is about to be published. A 256-point FFT x3 is well
+  // under a millisecond on the ESP32.
+  wtvb01::DominantFrequencies(waveform_local, waveform_local.SampleRateHz(),
+                              slot.derived_freq);
+
+  if (!mqtt.connected()) {
+    slot.wf_unsent++;
+    return;
+  }
+
+  const wtvb01::WaveformWindow &w = waveform_local;
+  const size_t n = w.count;
+  const uint32_t now = millis();
+
+  WaveformFrameHeader h = {};
+  memcpy(h.magic, "ZWF1", 4);
+  h.n = static_cast<uint16_t>(n);
+  h.axes = 3;
+  h.seq = slot.wf_seq;
+  h.chip_start_ms = w.start_chip_ms;
+  h.chip_end_ms = w.end_chip_ms;
+  h.gaps = w.gaps;
+  h.dropped = slot.wf_dropped;
+  h.unsent = slot.wf_unsent;
+  h.fs_hz = w.SampleRateHz();
+  h.g_per_count = wtvb01::kAccelScaleG;
+  h.uptime_ms = now;
+  h.published_at_ms = now;
+
+  uint8_t *out = waveform_frame;
+  memcpy(out, &h, sizeof(h));
+  out += sizeof(h);
+  memcpy(out, w.ax, n * sizeof(int16_t));
+  out += n * sizeof(int16_t);
+  memcpy(out, w.ay, n * sizeof(int16_t));
+  out += n * sizeof(int16_t);
+  memcpy(out, w.az, n * sizeof(int16_t));
+  out += n * sizeof(int16_t);
+  const size_t bytes = static_cast<size_t>(out - waveform_frame);
+
+  char topic[64];
+  snprintf(topic, sizeof(topic), "%s/%s", MQTT_TOPIC_WAVEFORM_BASE,
+           slot.address.c_str());
+  if (!mqtt.publish(topic, waveform_frame, bytes, false)) {
+    Serial.printf("[wave] publish failed (seq=%lu, %u bytes)\n",
+                  (unsigned long)slot.wf_seq, (unsigned)bytes);
+    slot.wf_unsent++;
+    return;
+  }
+  Serial.printf(
+      "[wave] seq=%lu n=%u fs=%.2fHz gaps=%lu dropped=%lu unsent=%lu "
+      "bytes=%u\n",
+      (unsigned long)slot.wf_seq, (unsigned)n, h.fs_hz, (unsigned long)w.gaps,
+      (unsigned long)slot.wf_dropped, (unsigned long)slot.wf_unsent,
+      (unsigned)bytes);
+  slot.wf_seq++;
+}
+#else
+void PublishWaveformIfReady(SensorSlot &) {}
+#endif
+
+// Now data mode has no temperature or battery in its packets, so ask the
+// sensor for them now and then: register block 0x3A..0x41 (carries the
+// temperature at 0x40) and then 0x64 (battery). The two reads are sent one
+// loop pass apart, the way the official app spaces its commands. Read
+// commands change nothing in the sensor. Each pair makes the waveform
+// window being built restart once, which is why this is rare.
+#if SENSOR_STATUS_POLL_MS > 0
+void StatusPollIfDue(SensorSlot &slot) {
+  if (slot.write_char == nullptr ||
+      slot.decoder.mode() != wtvb01::DataMode::kInstant) {
+    return;
+  }
+  const uint32_t now = millis();
+  uint8_t cmd[wtvb01::kCommandLen];
+  if (slot.status_poll_stage == 0) {
+    if (slot.last_status_poll_ms != 0 &&
+        now - slot.last_status_poll_ms < SENSOR_STATUS_POLL_MS) {
+      return;
+    }
+    wtvb01::BuildReadRegisterCommand(wtvb01::kRegVelocityX, cmd);
+    slot.write_char->writeValue(cmd, sizeof(cmd), false);
+    slot.last_status_poll_ms = now;
+    slot.status_poll_stage = 1;
+  } else if (now - slot.last_status_poll_ms >= wtvb01::kCommandSpacingMs) {
+    wtvb01::BuildReadRegisterCommand(wtvb01::kRegBattery, cmd);
+    slot.write_char->writeValue(cmd, sizeof(cmd), false);
+    slot.status_poll_stage = 0;
+  }
+}
+#else
+void StatusPollIfDue(SensorSlot &) {}
+#endif
 
 // Snapshots the latest decoded BLE reading into the ring buffer at
 // PUBLISH_INTERVAL_MS cadence, independent of MQTT connectivity. If the
@@ -477,15 +830,41 @@ bool PublishReading(SensorSlot &slot, const BufferedReading &buffered) {
 // outlasted READING_BUFFER_CAPACITY seconds of backlog.
 void SampleIfDue(SensorSlot &slot) {
   const uint32_t now = millis();
-  if (now - slot.last_sample_ms < PUBLISH_INTERVAL_MS || !slot.has_reading) {
+  if (now - slot.last_sample_ms < PUBLISH_INTERVAL_MS) {
     return;
   }
 
   wtvb01::SensorReading reading;
-  portENTER_CRITICAL(&slot.reading_mux);
-  reading = slot.latest_reading;
-  slot.has_reading = false;
-  portEXIT_CRITICAL(&slot.reading_mux);
+  const bool instant = slot.decoder.mode() == wtvb01::DataMode::kInstant;
+  if (instant) {
+    // Now data mode: the sensor sends no amplitudes, so velocity /
+    // displacement / angle are the smoothed RMS of the signed samples, the
+    // frequency comes from the last waveform window's FFT, and temperature
+    // and battery from the rare status poll (kept in latest_reading).
+    wtvb01::SensorReading derived;
+    portENTER_CRITICAL(&slot.wf_mux);
+    const bool ok = slot.stats.Rms(&derived);
+    portEXIT_CRITICAL(&slot.wf_mux);
+    portENTER_CRITICAL(&slot.reading_mux);
+    reading = slot.latest_reading;
+    portEXIT_CRITICAL(&slot.reading_mux);
+    if (!ok) {
+      return;
+    }
+    reading.velocity = derived.velocity;
+    reading.displacement = derived.displacement;
+    reading.angle = derived.angle;
+    reading.frequency = {slot.derived_freq[0], slot.derived_freq[1],
+                         slot.derived_freq[2]};
+  } else {
+    if (!slot.has_reading) {
+      return;
+    }
+    portENTER_CRITICAL(&slot.reading_mux);
+    reading = slot.latest_reading;
+    slot.has_reading = false;
+    portEXIT_CRITICAL(&slot.reading_mux);
+  }
 
   if (slot.buffer_count == READING_BUFFER_CAPACITY) {
     slot.dropped_samples++;
@@ -501,7 +880,8 @@ void SampleIfDue(SensorSlot &slot) {
 
   const size_t idx =
       (slot.buffer_head + slot.buffer_count) % READING_BUFFER_CAPACITY;
-  slot.reading_buffer[idx] = {reading, slot.next_seq++, now};
+  slot.reading_buffer[idx] = {reading, slot.decoder.mode() == wtvb01::DataMode::kInstant,
+                              slot.next_seq++, now};
   slot.buffer_count++;
   slot.last_sample_ms = now;
 }
@@ -545,7 +925,15 @@ void setup() {
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
+#if WAVEFORM_ENABLE
+  // Big enough for one waveform window plus topic and MQTT header.
+  if (!mqtt.setBufferSize(kMqttBufferBytes)) {
+    Serial.printf("[mqtt] could not allocate a %u-byte buffer\n",
+                  (unsigned)kMqttBufferBytes);
+  }
+#else
   mqtt.setBufferSize(768);
+#endif
   // Default keepalive (15s) is shorter than the BLE scan alone (10s),
   // so a scan plus any other blocking work could starve mqtt.loop()
   // long enough for the broker to drop the connection on its own. See
@@ -579,8 +967,10 @@ void loop() {
       continue;
     }
     any_connected = true;
+    StatusPollIfDue(sensors[i]);
     SampleIfDue(sensors[i]);
     DrainReadingBuffer(sensors[i]);
+    PublishWaveformIfReady(sensors[i]);
   }
 
   if (!any_connected) {

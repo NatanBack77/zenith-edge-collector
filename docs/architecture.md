@@ -176,16 +176,23 @@ funciona com os dois sem saber qual produziu a leitura.
 
 ## Por que o gargalo é o sensor, não o link
 
-As notificações BLE chegam a cada 20–50 ms, mas os registradores de
-vibração atualizam bem mais devagar — nas capturas os valores de vibração
-ficaram parados por dezenas de pacotes enquanto só a temperatura e o
-contador final se moviam. O sensor calcula as métricas de vibração sobre
-uma janela interna.
+Em modo **Default**, as notificações BLE chegam a ~100 pacotes/s (4 por
+notificação), mas os registradores de vibração atualizam bem mais
+devagar (~1 por segundo) — os valores ficam parados por dezenas de pacotes
+enquanto só a temperatura e a bateria se movem. O sensor calcula as métricas
+de vibração sobre uma janela interna.
+
+Em modo **Now data** (registrador `0x96`, ver `docs/protocol.md` §9) o
+sensor entrega aceleração bruta a 100 amostras/s com timestamp de 10 ms,
+sem perdas medidas. Esse é o dado que serve para FFT. Nesse modo o gargalo
+deixa de ser o sensor e passa a ser o que o nó faz com o fluxo: o firmware
+publica janelas contínuas em `zenith/waveform/<mac>` (binário).
 
 Consequências:
 
-- Publicar mais rápido que ~1 Hz envia duplicatas. O nó ESP32 agrupa em
-  `PUBLISH_INTERVAL_MS` (1 s por padrão).
+- Para as **amplitudes** do Default, publicar mais rápido que ~1 Hz envia
+  duplicatas. O nó ESP32 agrupa em `PUBLISH_INTERVAL_MS` (200 ms por padrão
+  hoje; antes 1 s).
 - Os timestamps marcam quando o coletor decodificou o pacote, não quando
   o sensor amostrou a superfície.
 - Perder um pacote não custa nada; o próximo carrega o estado completo de

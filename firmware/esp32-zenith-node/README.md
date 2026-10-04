@@ -3,31 +3,62 @@
 Lê um WitMotion WTVB01-BT50 por BLE e publica leituras normalizadas em
 MQTT sobre WiFi. Não precisa de PC.
 
-## Por que é simples
+## Dois modos de dados do sensor
 
-O sensor coloca todos os registradores de medição no seu broadcast `0x61`
-e envia sem ninguém pedir, então este firmware **por padrão nunca escreve
-no sensor**. Sem polling de registrador, sem unlock/save, sem codificação
-de comando. Ele faz scan, conecta, assina a characteristic de notify e
-faz o parse.
+O sensor tem dois modos (registrador `0x96`, que **não está no manual**: foi
+descoberto capturando o app oficial; ver [`docs/protocol.md`](../../docs/protocol.md)):
 
-Existe uma única exceção opcional, desligada por padrão:
-`SENSOR_CONFIGURE_RATE` em `config.h` (ver comentário lá) escreve o
-registrador de taxa de saída (`0x03`, universal na família WitMotion
-WT/BWT, mas **não testado em bancada** contra este sensor físico neste
-repositório) pra subir de 10Hz (padrão de fábrica) até 200Hz. O formato
-do comando de escrita está confirmado (`docs/protocol.md` §7, vindo do
-SDK oficial), mas o efeito real no hardware ainda não foi verificado
-aqui — teste numa bancada antes de confiar em campo.
+| | Default | Now data |
+|---|---|---|
+| Pacote `0x61` | 32 bytes | 40 bytes |
+| Conteúdo | amplitudes (sempre positivas), frequência, temperatura, bateria | aceleração XYZ (±16 g) + giroscópio + velocidade/ângulo/deslocamento **com sinal**, com timestamp do chip em ms |
+| Taxa medida | ~100 pacotes/s | **100,0 pacotes/s, exatos 10 ms entre amostras** |
+| Serve para | monitoramento (o que o app mostra) | FFT: desbalanceamento, folga |
 
-`PUBLISH_INTERVAL_MS` (o quanto o nó publica por segundo pro MQTT) era
-1000ms por padrão, jogando fora a maior parte do que o sensor já entrega
-via notify (~200ms de cadência nativa, ver abaixo) — isso não precisa de
-escrita no sensor pra melhorar, é gargalo puro do firmware. Agora é
-200ms por padrão.
+As duas variantes usam o mesmo byte de tipo (`0x61`), então o tamanho não vem
+do tipo: o decoder descobre 32 vs 40 pelo próprio fluxo (ver `Decoder` em
+`src/wtvb01.h`) e se corrige sozinho se o sensor trocar de modo.
 
-As medições **não** estão no advertisement BLE — só os UUIDs de serviço
-estão — então a conexão é obrigatória. Escuta passiva não funciona.
+Cada notificação BLE carrega **4 pacotes concatenados** (o ESP32 negocia
+ATT MTU 247 com o sensor).
+
+### Escritas no sensor: só opt-in
+
+Por padrão este firmware **não escreve no sensor**: faz scan, conecta, assina
+o notify e decodifica. Existem duas escritas opcionais, ambas desligadas em
+`config.example.h` e **persistentes** no sensor (terminam com "salvar"):
+
+- `SENSOR_CONFIGURE_DATA_MODE` / `SENSOR_DATA_MODE_INSTANT`: liga/desliga o
+  Now data. É a escrita que o app oficial envia (destravar → `0x96` → salvar,
+  ~100 ms entre comandos). O nó **só escreve se o sensor ainda não está no
+  modo desejado**, para não gastar a flash do sensor a cada reconexão.
+- `SENSOR_CONFIGURE_RATE`: escreve o registrador de taxa (`0x03`). Segue o
+  manual e os exemplos do SDK, mas **nunca foi visto no ar nesta unidade**.
+  A unidade testada já vem em 100 Hz.
+
+## Now data sem quebrar o app
+
+Em Now data o sensor **para de mandar** amplitudes, frequência, temperatura e
+bateria. Para o `zenith/readings` continuar com os mesmos campos, o nó os
+produz:
+
+- **velocity / displacement / angle**: RMS suavizado (constante de tempo de
+  ~1 s) dos valores com sinal (`InstantStats`). **São valores do nó, não os
+  registradores de amplitude do sensor** (o manual não define como o sensor os
+  calcula); tratar como "RMS do sinal instantâneo".
+- **frequency**: frequência dominante de cada janela de 256 amostras, por FFT
+  com janela de Hann e interpolação parabólica (≥ 5 Hz; resolução 0,39 Hz).
+- **temperature / battery**: lidos do sensor a cada `SENSOR_STATUS_POLL_MS`
+  (30 s), porque não vêm no pacote Now data.
+
+Cada mensagem traz `"mode":"instant"` (ou `"default"`).
+
+> **Medido em hardware:** ler registradores do sensor com frequência
+> perturba o fluxo de 100 amostras/s. Com leitura a 5 Hz só **1 janela de
+> onda fechou em 30 s** (`gaps=12`); sem polling, janelas contínuas. Por isso
+> o polling de temperatura/bateria é raro, e as amplitudes não são lidas dos
+> registradores (que continuam vivos no Now data, mas custam a continuidade
+> da onda).
 
 ## Hardware
 
@@ -59,53 +90,126 @@ máquina. Escolha o env da sua placa: `esp32dev`, `esp32-c3` ou `esp32-s3`.
 
 ## Dados publicados
 
-Tópico: `zenith/readings/<mac-do-sensor>`
+### `zenith/readings/<mac-do-sensor>` (JSON, ~5 por segundo)
 
 ```json
 {
   "sensor": "e6:6b:9a:cc:88:25",
-  "uptime_ms": 42000,
-  "velocity":     { "x": 1.0,   "y": 0.0,   "z": 0.0 },
-  "displacement": { "x": 21.0,  "y": 9.0,   "z": 6.0 },
-  "angle":        { "x": 0.088, "y": 0.005, "z": 0.033 },
-  "frequency":    { "x": 11.0,  "y": 12.0,  "z": 16.0 },
-  "device":       { "temperature": 24.9, "power_raw": 418, "rssi": -49 }
+  "seq": 61,
+  "uptime_ms": 48838,
+  "published_at_ms": 48838,
+  "mode": "instant",
+  "velocity":     { "x": 30.8, "y": 68.5, "z": 118.2 },
+  "displacement": { "x": 312.4, "y": 367.1, "z": 210.2 },
+  "angle":        { "x": 4.03, "y": 8.74, "z": 16.84 },
+  "frequency":    { "x": 8.6, "y": 6.3, "z": 6.3 },
+  "device": { "temperature": 35.03, "power_raw": 434, "battery_v": 4.34,
+              "battery_pct": 100, "alarm": 0, "rssi": -45 }
 }
 ```
 
 Unidades: velocity mm/s, displacement µm, angle graus, frequency Hz,
-temperature °C. O schema é igual ao de `wtvb01.SensorReading` no coletor
-Go, então os dois são intercambiáveis a jusante.
+temperature °C. **Compatível com o schema anterior**: os campos novos
+(`mode`, `seq`, `published_at_ms`, `battery_v`, `battery_pct`, `alarm`) são só
+acréscimos; quem lia os campos antigos continua lendo igual.
 
-`device.temperature` é a temperatura do **módulo sensor**, não da máquina.
-Veja [`docs/indicators.md`](../../docs/indicators.md).
+- `device.power_raw` é o registrador de **bateria** (`0x64`), em centivolts.
+  Confirmado em hardware: o último valor do pacote Default bate com a leitura
+  do `0x64` (437…441 vs 439). `battery_v = power_raw / 100` e `battery_pct`
+  usa a tabela do app oficial. (Antes isto era publicado cru por não se saber
+  o que era.)
+- `device.alarm`: flags de alarme embarcados do sensor (0 = nenhum).
+- `device.temperature` é a temperatura do **módulo sensor**, não da máquina.
+  Veja [`docs/indicators.md`](../../docs/indicators.md).
+- Em `"mode":"instant"` os campos de movimento são os derivados descritos
+  acima.
 
-`device.power_raw` é um candidato a indicar a carga da bateria do
-sensor — o app oficial da WitMotion mostra um campo "Power Percent(%)"
-que esse contador pode alimentar, mas a conversão para porcentagem
-**não está confirmada** (valores observados em repouso, como 418, ficam
-bem fora de 0–100). É publicado cru de propósito; acompanhe a tendência
-ao longo de um ciclo de carga/descarga real para calibrar. Veja
-[`docs/protocol.md`](../../docs/protocol.md) §5 e §8.
+### `zenith/waveform/<mac-do-sensor>` (binário, uma janela a cada 2,56 s)
 
-O nó também publica um valor retido `online`/`offline` em
-`zenith/status`, com `offline` configurado como last will do MQTT, para
-que um nó travado fique visível no broker.
+Só existe em Now data. **Frame binário little-endian**, 1584 bytes para 256
+amostras (3,4× menor que JSON e sem custo de formatação no ESP32):
+
+| Offset | Tipo | Campo |
+|---|---|---|
+| 0 | `char[4]` | `"ZWF1"` (versão do formato) |
+| 4 | `u16` | `n`: amostras por eixo (256) |
+| 6 | `u8` | `axes` (3) |
+| 7 | `u8` | reservado |
+| 8 | `u32` | `seq`: contador de frames por sensor |
+| 12 | `u32` | `chip_start_ms`: relógio do chip na 1ª amostra |
+| 16 | `u32` | `chip_end_ms`: ... na última |
+| 20 | `u32` | `gaps`: reinícios de janela por perda de amostras |
+| 24 | `u32` | `dropped`: janelas perdidas porque o loop estava ocupado (total) |
+| 28 | `u32` | `unsent`: janelas perdidas por MQTT fora/falha (total) |
+| 32 | `f32` | `fs_hz`: taxa implícita no relógio do chip |
+| 36 | `f32` | `g_per_count`: `g = contagem × g_per_count` (16/32768) |
+| 40 | `u32` | `uptime_ms` do ESP32 |
+| 44 | `u32` | `published_at_ms` |
+| 48 | `i16[n]` | `ax` (contagens brutas) |
+| 48+2n | `i16[n]` | `ay` |
+| 48+4n | `i16[n]` | `az` |
+
+Janelas são **contínuas**: se o relógio do chip mostra amostras perdidas, a
+janela parcial é descartada e recomeça (uma FFT sobre amostras espaçadas
+irregularmente estaria errada). Janelas **não ficam em buffer** durante queda
+do MQTT (são grandes demais); contam em `unsent`.
+
+Decodificar e ver o espectro: `python3 tools/waveform_listen.py --user ...`
+(precisa de `paho-mqtt`; com `numpy` mostra RMS e pico de FFT por eixo).
+
+### `zenith/status`
+
+Valor retido `online`/`offline`, com `offline` configurado como last will do
+MQTT, para que um nó travado fique visível no broker.
+
+## Desempenho: o que foi medido
+
+Hardware: ESP32 clássico, sensor a ~1 m, broker na LAN. Estado em 4 out 2026:
+
+| Medida | Resultado |
+|---|---|
+| Janelas de onda em 60 s | 23 consecutivas (`seq 46→68`), **0 perdidas, 0 gaps, 0 dropped, 0 unsent** |
+| Taxa medida das janelas | 100,00 Hz |
+| Escala de aceleração | |a| ≈ 1,00 g com o sensor parado (±16 g / 32768 correto) |
+| RAM / flash | 36,3 % / 80,0 % |
+| `zenith/readings` | ~4,2 leituras/s medidas no broker (alvo 5/s, ver `PUBLISH_INTERVAL_MS`) |
+
+Decisões de desempenho:
+
+- **Frame binário** para a onda, em vez de JSON.
+- **Sem re-scan bloqueante** quando já há um sensor conectado: o modo
+  automático tem `MAX_AUTO_SENSORS` vagas, e uma vaga vazia fazia o nó
+  escanear 10 s em loop, parando leituras e janelas. Agora a vaga vazia é
+  tentada a cada 5 min, com scan de 4 s. Fixe o MAC em `SENSOR_ADDRESSES`
+  para não escanear nunca.
+- **Boot sem esperar redes ausentes**: o nó só tenta as redes WiFi que o scan
+  viu (antes, cada rede configurada e ausente custava ~8 s).
+- A FFT (3 × 256 pontos) roda no `loop()`, não na task do BLE, para não
+  atrasar notificações.
+- **Não mexi no modo de economia do WiFi**: a pesquisa que fiz sobre
+  coexistência WiFi+BLE do ESP32 foi inconclusiva sobre `WIFI_PS_NONE`. Só
+  mudar com medição (os contadores `gaps`/`dropped` mostram a perda).
 
 ## Testes
 
-`src/wtvb01.{h,cpp}` não tem dependências e compila no host, então o
-decoder é testado contra os mesmos bytes reais capturados do sensor que a
-implementação em Go usa:
+`src/wtvb01.{h,cpp}` não tem dependências e compila no host. Os testes usam
+**bytes reais capturados do sensor**: a captura antiga (Go e C++ usam a mesma)
+e três capturas do firmware 10057.2.7 em `test/testdata/` (Default 100 Hz,
+Now data 100 Hz e a troca de modo, com a notificação mista 32+40 bytes):
 
 ```bash
-c++ -std=c++17 -I src -o /tmp/wtvb01_test test/decoder_test.cpp src/wtvb01.cpp
+c++ -std=c++17 -Wall -Wextra -I src -o /tmp/wtvb01_test test/decoder_test.cpp src/wtvb01.cpp
 /tmp/wtvb01_test ../../internal/protocol/wtvb01/testdata/capture-wtvb01-bt50.hex
 ```
 
-A verificação mais forte se apoia no fato de que o broadcast `0x61` e as
-leituras de registrador `0x71` codificam os mesmos registradores de forma
+Cobrem, entre outros: detecção 32/40 bytes, MTU baixo (notificações de 20, 7 e 1
+byte), troca de modo no meio do fluxo, rejeição de tempo impossível,
+acumulador de janelas (gaps, relógio voltando, 200 Hz), FFT (erro < 0,25 Hz) e
+RMS. A verificação mais forte da parte Default continua sendo que o broadcast
+`0x61` e as leituras `0x71` codificam os mesmos registradores de forma
 independente, então precisam decodificar igual.
+
+Build do firmware: `pio run -e esp32dev` (ou `-t upload`).
 
 ## Resolução de problemas
 
@@ -118,3 +222,14 @@ sensor está ligado.
 **Compila mas não chega dado.** Confirme que a placa tem BLE de verdade
 (não é um ESP32-S2) e que `SENSOR_ADDRESS` no `config.h` está vazio ou
 casa em minúsculas com o MAC do sensor.
+
+**MQTT `rc=-4` (timeout) no broker público.** `test.mosquitto.org` demorou
+ou recusou conexões do ESP32 nos testes, mesmo alcançável do PC. Use um
+broker próprio (há um Mosquitto com autenticação no `docker-compose.yml` do
+repositório Zenith, em `infra/mosquitto`).
+
+**Monitoramento parou depois de ligar o Now data.** O app lê o
+`zenith/readings`; confira que o nó está publicando `"mode":"instant"` e que
+`SENSOR_STATUS_POLL_MS` não é 0. Para voltar ao modo antigo, configure
+`SENSOR_DATA_MODE_INSTANT 0` (com `SENSOR_CONFIGURE_DATA_MODE 1`), grave uma
+vez, e depois desligue a flag de configuração.

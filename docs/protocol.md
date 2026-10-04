@@ -1,6 +1,6 @@
 # Protocolo BLE do WTVB01-BT50
 
-Duas fontes sustentam este documento, e toda afirmação abaixo diz de qual
+Quatro fontes sustentam este documento, e toda afirmação abaixo diz de qual
 delas vem:
 
 1. **O SDK Python oficial.** `Python/BWT901BLE5.0_python_sdk` do
@@ -12,6 +12,18 @@ delas vem:
 2. **Bytes capturados de um WTVB01-BT50 físico** (MAC
    `E6:6B:9A:CC:88:25`), guardados em
    `internal/protocol/wtvb01/testdata/capture-wtvb01-bt50.hex`.
+3. **O manual oficial WTVB01-BT50 V260410** (WitMotion), e o **SDK/apps
+   oficiais** da pasta indicada na página do produto (SDK
+   `WTVB01-BT50-改版` em C#/Java/Python, app Android 4.0.9 decompilado, app
+   Flutter 26.09.15). Referência verificada, com as lacunas do manual e as
+   inconsistências entre fontes, no repositório Zenith:
+   `docs/sensor-wtvb01-bt50.md`. (A frase acima "não existe
+   `Wtvb01Resolver`" vale só para o repositório público do GitHub; o SDK do
+   Drive o contém, e ele decodifica apenas o pacote de 28 bytes.)
+4. **Captura HCI do app oficial** (4 out 2026, firmware do sensor
+   10057.2.7, Android 15): comandos enviados ao sensor, tamanho e taxa dos
+   pacotes, e a troca de modo. Fixtures em
+   `firmware/esp32-zenith-node/test/testdata/`. Ver §9.
 
 O SDK é genérico para a família WT e **não** decodifica os campos de
 vibração do WTVB01, então é a captura que define o layout do pacote.
@@ -86,6 +98,14 @@ produz números de aparência plausível, que foi exatamente por que isso só
 foi pego comparando contra as leituras de registrador. Por isso o decoder
 escolhe o tamanho pelo tipo (`packetLenFor`).
 
+> **Atualização (hardware, firmware 10057.2.7):** o tamanho do `0x61`
+> **não** é determinado só pelo tipo. Existem dois formatos com o mesmo byte
+> de tipo: **32 bytes** (modo Default) e **40 bytes** (modo "Now data",
+> §9). O decoder do firmware ESP32 descobre o tamanho pelo fluxo (procura
+> o próximo cabeçalho `55 61`/`55 71` a 32 ou 40 bytes). O decoder Go
+> (`internal/protocol/wtvb01`) **ainda só conhece 32 bytes** e precisa do
+> mesmo tratamento antes de ser usado com o sensor em Now data.
+
 O layout do `0x71` bate com o SDK e com o manual oficial:
 `0x55 0x71 <registrador inicial, 2 bytes LE> <16 bytes = 8 registradores, LE>`.
 
@@ -106,8 +126,12 @@ Todos os valores são int16 com sinal, little-endian. O `getSignInt16`
 (`device_model.py:180-184`) subtrai 2^16 quando o valor cru é ≥ 2^15, o
 que é complemento de dois padrão.
 
-Faixas documentadas (manual): velocidade 0–100 mm/s, deslocamento
-0–30000 µm, frequência 1–100 Hz, temperatura −40 a +85 °C.
+Faixas segundo o **manual oficial V260410**: velocidade **0–50 mm/s**,
+deslocamento 0–30000 µm, **frequência de vibração 5–100 Hz**. (Versões
+anteriores deste documento diziam 0–100 mm/s e 1–100 Hz; a divergência de
+velocidade ainda existe entre fontes: ver `docs/sensor-wtvb01-bt50.md` no
+repositório Zenith. A faixa de temperatura de −40 a +85 °C não consta no
+manual lido; o manual dá −20 a 60 °C de operação.)
 
 ### Temperature é a temperatura do próprio módulo
 
@@ -135,8 +159,8 @@ para detectar deriva; não substitui uma sonda no mancal.
 | 6 | 14-15 | Temperature (`0x40`) |
 | 7-9 | 16-21 | Displacement X, Y, Z (`0x41`-`0x43`) |
 | 10-12 | 22-27 | Frequency X, Y, Z (`0x44`-`0x46`) |
-| 13 | 28-29 | Constante `0x0000` em todas as capturas; não decodificado |
-| 14 | 30-31 | Contador com deriva lenta; não é registrador de medição documentado. O app oficial mostra um campo "Power Percent(%)", que este valor pode alimentar — decodificado como `device.power_raw`, cru, **não** como porcentagem (veja §8) |
+| 13 | 28-29 | **Status de alarme** (`ALARMSTAT`, manual §5.2.8): `0` = nenhum alarme. Observado `0` em 4868 pacotes |
+| 14 | 30-31 | **Bateria** (`BatPer`, registrador `0x64`), em **centivolts** (`raw/100` = volts). Confirmado em hardware: 437…441 no pacote vs 439 na leitura do `0x64`. Publicado como `device.power_raw` (nome antigo mantido), mais `battery_v` e `battery_pct` (§9) |
 
 Isso bate com a ordem declarada no manual: *"vibration velocity XYZ,
 vibration angle XYZ, temperature, vibration displacement XYZ, vibration
@@ -198,12 +222,80 @@ Todos são enviados para a characteristic de escrita `ffe9`.
   houve comparação lado a lado com o app oficial da WitMotion sob
   vibração real. Se alguma escala estiver errada, é mudança de uma linha
   em `internal/protocol/wtvb01/registers.go`.
-- **Valor 14 do pacote `0x61`** (o contador com deriva). Provavelmente
-  alimenta a porcentagem de bateria mostrada no app, mas não verificado:
-  os valores observados (ex. 418) ficam bem fora de 0–100, então é
-  exposto cru em `device.power_raw`, sem tentar converter para
-  porcentagem. Acompanhe esse número ao longo de um ciclo real de
-  carga/descarga para achar a conversão certa.
+- ~~**Valor 14 do pacote `0x61`**~~ — **resolvido**: é a bateria (`0x64`),
+  em centivolts. Falta apenas conferir a conversão para porcentagem ao
+  longo de uma descarga real (a tabela vem do app oficial 4.0.9).
 
-Temperatura, tamanhos de pacote, endereços de registrador, framing, UUIDs
-e a codificação dos comandos estão todos confirmados.
+Temperatura, tamanhos de pacote (32 e 40 bytes), endereços de registrador,
+framing, UUIDs, a codificação dos comandos e o registrador do modo de dados
+(`0x96`) estão confirmados em hardware.
+
+## 9. Modo "Now data" (pacote de 40 bytes) e registrador `0x96`
+
+Tudo abaixo vem da **captura HCI do app oficial** e de testes no firmware
+ESP32 contra o sensor físico (4 out 2026, firmware do sensor 10057.2.7).
+
+### Trocar o modo
+
+O app oficial tem o seletor "Data mode" (Default / Now data). Ele envia à
+characteristic de escrita (`ffe9`, ATT Write Command), com ~100 ms entre os
+comandos:
+
+| Troca | Comandos |
+|---|---|
+| Default → Now data | `FF AA 69 88 B5` → `FF AA 96 01 00` → `FF AA 00 00 00` |
+| Now data → Default | `FF AA 69 88 B5` → `FF AA 96 00 00` → `FF AA 00 00 00` |
+
+O registrador **`0x96` não está no manual V260410**. O app o lê ao conectar
+(`FF AA 27 96 00`). O comando termina com "salvar", então **o modo persiste
+no sensor**; por isso o firmware só escreve quando o sensor não está já no
+modo desejado.
+
+**Nunca escrever no registrador `0x65`**: o app oficial o usa para entrar em
+modo DFU (atualização de firmware).
+
+### Formato do pacote de 40 bytes
+
+`55 61` | ano, mês, dia, hora, minuto, segundo (1 byte cada) | milissegundos
+(`u16`) | `AX AY AZ` | `GX GY GZ` | `NVX NVY NVZ` | `NADX NADY NADZ` |
+`NDX NDY NDZ` (todos `int16` little-endian):
+
+- aceleração: `raw / 32768 × 16` g (verificado: |a| ≈ 1,00 g com o sensor
+  parado);
+- giroscópio: `raw / 32768 × 2000` °/s;
+- velocidade (mm/s) e deslocamento (µm): **sinal alternado, média ≈ 0**
+  (uma onda, não uma amplitude);
+- ângulo: `raw / 32768 × 180` °;
+- o relógio do chip, sem calibração, começa em 2015-01-01 00:00:00.
+
+O Now data **não traz** frequência, temperatura, bateria nem alarme.
+
+### Taxa, empacotamento e MTU (medidos)
+
+- O sensor testado estava em **return rate 100 Hz** (lido no diálogo do
+  app; o manual diz padrão de fábrica de 10 Hz). Medido: 100,0 pacotes/s,
+  **10 ms exatos entre 4167 de 4167 amostras** do Now data; Default, 99,3
+  pacotes/s.
+- Cada notificação BLE carrega **4 pacotes concatenados** (128 bytes no
+  Default, 160 no Now data), com MTU alto. O ESP32/NimBLE negocia **ATT MTU
+  247** com o sensor.
+- Opções de return rate do app para esta versão de firmware: 0,2 / 0,5 / 1
+  / 2 / 5 / 10 / 20 / 50 / 100 / 200 Hz. Com 100 Hz o limite de Nyquist é
+  50 Hz.
+
+### Os registradores de amplitude continuam vivos no Now data, mas ler custa a onda
+
+No Now data, `FF AA 27 3A 00` ainda devolve velocidade/deslocamento/
+frequência/temperatura (valores que variam com o movimento, atualizados
+a cerca de 1 por segundo). Porém, **cada leitura perturba o fluxo de
+amostras**: lendo a 5 Hz, só 1 janela contígua de 256 amostras fechou em 30 s
+(`gaps=12`); sem leituras, janelas contínuas. Por isso o firmware deriva as
+leituras de movimento da própria onda e só lê temperatura e bateria a cada
+30 s.
+
+### Como o firmware mantém o `zenith/readings` em Now data
+
+Ver `firmware/esp32-zenith-node/README.md`: RMS suavizado de velocidade,
+deslocamento e ângulo, frequência dominante por FFT por janela, e
+temperatura/bateria por leitura rara. Esses valores são **do nó**, não os
+registradores de amplitude do sensor (cuja definição o manual não dá).

@@ -106,3 +106,32 @@ static const char *const SENSOR_ADDRESSES[] = {
 // without generating BLE/WiFi traffic a multi-sensor node can't keep up
 // with. Only relevant when SENSOR_CONFIGURE_RATE is 1.
 #define SENSOR_RATE_CODE 0x08
+
+// ---- Sensor data mode: "Now data" (optional, writes to the sensor) ----
+// The sensor has two data modes. Default sends amplitudes (what the Zenith
+// Monitoramento page shows) at ~100 packets/s. "Now data" sends raw
+// acceleration with a chip timestamp at the same rate, which is what an FFT
+// (unbalance, looseness) needs. Register 0x96: 1 = Now data, 0 = Default --
+// not in the manual, found by capturing the official app (see
+// docs/protocol.md). The write is the same unlock -> write -> save the
+// official app sends, and it PERSISTS in the sensor, so the node only
+// writes when the sensor is not already in the wanted mode.
+//
+// With Now data on, zenith/readings keeps publishing: velocity /
+// displacement / angle become the node's smoothed RMS of the signed
+// samples, frequency comes from a 256-point FFT of each window, and
+// temperature / battery are read from the sensor every
+// SENSOR_STATUS_POLL_MS. Each message carries "mode":"instant".
+// The raw acceleration goes to MQTT_TOPIC_WAVEFORM_BASE/<mac> as a binary
+// frame (see the README).
+#define SENSOR_CONFIGURE_DATA_MODE 0
+// 1 = Now data (waveform + derived readings), 0 = Default. Only used when
+// SENSOR_CONFIGURE_DATA_MODE is 1.
+#define SENSOR_DATA_MODE_INSTANT 1
+// Rare read of temperature and battery while in Now data mode. More often
+// than ~10 s makes waveform windows restart (measured), so keep it high.
+#define SENSOR_STATUS_POLL_MS 30000
+// Publish gap-free acceleration windows (needs Now data mode to produce
+// anything; costs nothing in Default mode).
+#define WAVEFORM_ENABLE 1
+#define MQTT_TOPIC_WAVEFORM_BASE "zenith/waveform"
