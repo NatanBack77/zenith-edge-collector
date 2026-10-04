@@ -21,6 +21,7 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 
 #include "config.h"
 #include "wtvb01.h"
@@ -64,6 +65,18 @@
 namespace {
 
 constexpr uint32_t kScanDurationSec = 10;
+
+// Task watchdog. The Arduino core already runs a 5 s watchdog on the idle
+// task of CPU0 (a reboot if CPU0 is starved), but nothing watches the Arduino
+// loop() task: if it hung (a blocked socket, a stuck BLE call) the node would
+// freeze silently. This subscribes loop() too, with a timeout longer than any
+// legitimate blocking call (BLE scan <= 10 s, a WiFi attempt <= 8 s, a BLE
+// connect <= kBleConnectTimeoutMs), so a hang becomes a reboot and the node
+// comes back by itself in ~25 s. The reset shows up as "task-watchdog" in
+// zenith/node/<mac>. The longer period also tolerates the short CPU0 stalls
+// the 5 s default would have turned into a reboot.
+constexpr uint32_t kWatchdogTimeoutS = 30;
+constexpr uint32_t kBleConnectTimeoutMs = 10000;
 // A BLE scan blocks loop() for its whole duration, which stalls sampling
 // and publishing for every connected sensor. Once at least one slot is
 // streaming, a still-empty slot (auto mode has MAX_AUTO_SENSORS slots, so
@@ -307,6 +320,7 @@ bool ConnectSlot(SensorSlot &slot, size_t index) {
   if (slot.client == nullptr) {
     slot.client = NimBLEDevice::createClient();
     slot.client->setClientCallbacks(&client_callbacks, false);
+    slot.client->setConnectTimeout(kBleConnectTimeoutMs);
   }
 
   if (!slot.client->connect(dev)) {
@@ -561,6 +575,7 @@ bool TryWiFiNetwork(const char *ssid, const char *password) {
 
   const uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    feedLoopWDT();
     if (millis() - start > WIFI_TRY_TIMEOUT_MS) {
       Serial.printf("\n[wifi] %s timed out, status=%d\n", ssid,
                     WiFi.status());
@@ -979,6 +994,11 @@ void setup() {
   // range in a noisy plant.
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
+  // Reconfigure the already-running task watchdog (30 s, reboot on timeout)
+  // and subscribe the Arduino loop() task to it.
+  esp_task_wdt_init(kWatchdogTimeoutS, true);
+  enableLoopWDT();
+
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
 #if WAVEFORM_ENABLE
   // Big enough for one waveform window plus topic and MQTT header.
@@ -1005,6 +1025,19 @@ void setup() {
 }
 
 void loop() {
+  feedLoopWDT();
+#ifdef DEBUG_FORCE_HANG_AFTER_MS
+  // Bench test only (build flag): hangs loop() once, to prove the watchdog
+  // reboots the node and that it recovers by itself.
+  static bool hung = false;
+  if (!hung && millis() > DEBUG_FORCE_HANG_AFTER_MS) {
+    hung = true;
+    Serial.println("[debug] hanging loop() on purpose");
+    for (;;) {
+      delay(1000);
+    }
+  }
+#endif
   if (EnsureWiFi() && EnsureMQTT()) {
     mqtt.loop();
     PublishNodeDiag();

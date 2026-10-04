@@ -51,6 +51,9 @@ static const WifiCredential WIFI_NETWORKS[] = {
 #define MQTT_TOPIC_STATUS "zenith/status"
 
 // ---- Sensor(s) ----
+// PIN YOUR SENSOR HERE for anything that must keep running: with one slot there is
+// no periodic BLE re-scan, the first scan ends as soon as the sensor is seen, and a
+// reboot recovers in ~13 s instead of ~23 s. Auto mode (empty list) is for the bench.
 // List every WTVB01-BT50 MAC this node should connect to and stream
 // from at the same time. Leave the array empty to auto-connect to up
 // to MAX_AUTO_SENSORS units found during a scan (whichever ones are in

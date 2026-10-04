@@ -201,6 +201,12 @@ Decisões de desempenho:
   para não escanear nunca.
 - **Boot sem esperar redes ausentes**: o nó só tenta as redes WiFi que o scan
   viu (antes, cada rede configurada e ausente custava ~8 s).
+- **Watchdog de 30 s no `loop()`** (o core só vigia a tarefa ociosa da CPU0, com 5 s): um travamento vira
+  reboot e o nó volta sozinho; o motivo aparece como `task-watchdog` em `zenith/node/<mac>`. Testado com um
+  travamento forçado (`-DDEBUG_FORCE_HANG_AFTER_MS=...`): onda de volta 57 s depois, sem MAC fixado.
+- **Fixe o MAC do sensor** em `SENSOR_ADDRESSES`: com uma vaga só não há re-scan periódico, e o scan inicial
+  termina assim que o sensor é visto. Recuperação medida depois de um reset: ~23 s sem fixar, **~13 s** fixando
+  (boot 0,7 s, WiFi 2,3 s, MQTT 0,3 s, scan BLE 4,7 s, conexão 1,4 s, 1ª janela 2,6 s).
 - **Sem `String` a cada publicação** (tópico em buffer fixo): o `zenith/readings` roda ~5×/s por horas e uma
   `String` alocada e liberada a cada chamada é fonte de fragmentação do heap.
 - A FFT (3 × 256 pontos) roda no `loop()`, não na task do BLE, para não
