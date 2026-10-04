@@ -18,9 +18,23 @@ os diagramas.
 
 ## Status
 
-MVP. Scan, conexão e decodificação funcionam contra hardware físico, tanto
-no coletor Go quanto no nó ESP32. Buffer local, métricas e múltiplos
-sensores simultâneos ainda não foram implementados, de propósito.
+Scan, conexão e decodificação funcionam contra hardware físico. Os dois
+coletores **não estão no mesmo nível**:
+
+- **Nó ESP32 (`firmware/esp32-zenith-node`)** é o caminho de campo e o mais
+  completo: vários sensores simultâneos, buffer em anel para quedas do MQTT,
+  detecção automática do formato de pacote, suporte ao modo **Now data**
+  (aceleração bruta a 100 amostras/s, janelas contínuas publicadas em
+  `zenith/waveform/<mac>`), bateria e alarme decodificados, e diagnóstico do
+  nó (`zenith/node/<mac>`). Testado contra o sensor real: 23 janelas
+  consecutivas em 60 s sem perda.
+- **CLI em Go (`cmd/zenith-edge`)** continua só com `scan` e `test`, e o
+  decoder dele **só conhece o pacote de 32 bytes** (modo Default). Ele precisa
+  do mesmo tratamento do firmware (pacote de 40 bytes, bateria) antes de ser
+  usado com o sensor em Now data.
+
+O formato dos pacotes, o registrador que troca o modo (`0x96`, que não consta
+no manual) e as medições estão em [docs/protocol.md](docs/protocol.md) §9.
 
 ## Instalação
 

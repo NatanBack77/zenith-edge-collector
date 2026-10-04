@@ -160,7 +160,7 @@ flowchart LR
     S1 -->|BLE| GO
     GO --> TERM
     S2 -->|BLE| ESP
-    ESP -->|"WiFi e MQTT<br/>zenith/readings/mac"| BROKER
+    ESP -->|"WiFi e MQTT<br/>zenith/readings/mac<br/>zenith/waveform/mac"| BROKER
     BROKER --> APPS
 
     style GO fill:#e8f0fe,stroke:#4285f4
@@ -171,8 +171,11 @@ flowchart LR
 ```
 
 A linha de cima é o caminho de desenvolvimento, a de baixo o deploy em
-campo. Os dois emitem o mesmo JSON, então qualquer consumidor a jusante
-funciona com os dois sem saber qual produziu a leitura.
+campo. Os dois emitem o mesmo JSON de leitura, então qualquer consumidor a
+jusante funciona com os dois sem saber qual produziu a leitura. Só o nó ESP32
+publica, além disso, a **onda bruta** (`zenith/waveform/<mac>`, binário) e a
+saúde do nó (`zenith/node/<mac>`); os tópicos e formatos estão no README do
+firmware.
 
 ## Por que o gargalo é o sensor, não o link
 

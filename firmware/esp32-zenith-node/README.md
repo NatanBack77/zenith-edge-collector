@@ -76,9 +76,10 @@ Cada mensagem traz `"mode":"instant"` (ou `"default"`).
 | ESP32-S3 | sim | |
 | **ESP32-S2** | **não** | não tem rádio Bluetooth nenhum |
 
-BLE e WiFi dividem a mesma antena no ESP32. Um sensor com intervalo de
-notificação de ~200 ms é tranquilo; evite saturar o WiFi com transferências
-contínuas em bloco.
+BLE e WiFi dividem a mesma antena no ESP32. O sensor entrega ~100 pacotes/s
+(4 por notificação, ~25 notificações/s), o que o ESP32 acompanhou sem perda nos
+testes; evite saturar o WiFi com transferências contínuas em bloco, e confira
+os contadores `gaps`/`dropped`/`unsent` das janelas de onda se mexer nisso.
 
 O NimBLE permite cerca de três conexões simultâneas por padrão, então um
 nó pode atender vários sensores depois de estender o tratamento de
@@ -187,7 +188,7 @@ Hardware: ESP32 clássico, sensor a ~1 m, broker na LAN. Estado em 4 out 2026:
 | Janelas de onda em 60 s | 23 consecutivas (`seq 46→68`), **0 perdidas, 0 gaps, 0 dropped, 0 unsent** |
 | Taxa medida das janelas | 100,00 Hz |
 | Escala de aceleração | |a| ≈ 1,00 g com o sensor parado (±16 g / 32768 correto) |
-| RAM / flash | 36,3 % / 80,0 % |
+| RAM / flash | 36,3 % / 80,3 % |
 | `zenith/readings` | ~4,2 leituras/s medidas no broker (alvo 5/s, ver `PUBLISH_INTERVAL_MS`) |
 
 Decisões de desempenho:
@@ -236,7 +237,7 @@ Bluetooth do celular, não basta fechar o app. Fora isso, confirme que o
 sensor está ligado.
 
 **Compila mas não chega dado.** Confirme que a placa tem BLE de verdade
-(não é um ESP32-S2) e que `SENSOR_ADDRESS` no `config.h` está vazio ou
+(não é um ESP32-S2) e que `SENSOR_ADDRESSES` no `config.h` está vazio ou
 casa em minúsculas com o MAC do sensor.
 
 **MQTT `rc=-4` (timeout) no broker público.** `test.mosquitto.org` demorou
