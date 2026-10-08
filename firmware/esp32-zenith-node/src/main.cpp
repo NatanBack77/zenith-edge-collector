@@ -24,6 +24,11 @@
 #include <esp_task_wdt.h>
 
 #include "config.h"
+#if MQTT_USE_TLS
+#include <WiFiClientSecure.h>
+#include <time.h>
+#include "root_ca.h"
+#endif
 #include "wtvb01.h"
 
 // Settings added after the first config.h templates went out: defaulted
@@ -91,7 +96,11 @@ constexpr uint32_t kReconnectDelayMs = 3000;
 constexpr uint32_t kWifiRetryIntervalMs = 30000;
 constexpr uint32_t kMqttRetryIntervalMs = 5000;
 
+#if MQTT_USE_TLS
+WiFiClientSecure wifi_client;
+#else
 WiFiClient wifi_client;
+#endif
 PubSubClient mqtt(wifi_client);
 
 // One sensor per slot: SENSOR_ADDRESSES_COUNT slots pinned to those
@@ -650,6 +659,14 @@ bool EnsureMQTT() {
   attempted = true;
   last_attempt_ms = millis();
 
+#if MQTT_USE_TLS
+  // Validar o certificado exige data correta: sem NTP o ESP32 acha que e 1970.
+  if (time(nullptr) < 1700000000) {
+    Serial.println("[mqtt] aguardando hora via NTP para validar o TLS");
+    configTime(0, 0, "pool.ntp.org", "time.google.com");
+    return false;
+  }
+#endif
   const String client_id = "zenith-" + WiFi.macAddress();
   Serial.printf("[mqtt] connecting to %s:%d\n", MQTT_HOST, MQTT_PORT);
 
@@ -999,6 +1016,9 @@ void setup() {
   esp_task_wdt_init(kWatchdogTimeoutS, true);
   enableLoopWDT();
 
+#if MQTT_USE_TLS
+  wifi_client.setCACert(MQTT_ROOT_CA);
+#endif
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
 #if WAVEFORM_ENABLE
   // Big enough for one waveform window plus topic and MQTT header.

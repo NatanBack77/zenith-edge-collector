@@ -96,6 +96,17 @@ pio run -e esp32-c3 -t upload -t monitor
 `src/config.h` está no gitignore, então as credenciais ficam só na sua
 máquina. Escolha o env da sua placa: `esp32dev`, `esp32-c3` ou `esp32-s3`.
 
+## MQTT com TLS (broker na AWS)
+
+`MQTT_USE_TLS 1` em `src/config.h` troca para `WiFiClientSecure` na porta **8883**. O nó valida o certificado do broker com o
+**ISRG Root X1** (`src/root_ca.h`, válido até 2035-06-04; é a raiz da cadeia atual do Let's Encrypt) e **sincroniza a hora por NTP**
+antes de conectar (sem hora correta o TLS rejeita o certificado). O host deve ser o nome do certificado, `<ip-com-hifens>.sslip.io`.
+Custos medidos (6 out 2026): flash 80% → 90%, heap livre ~114 KB → ~66 KB (mínimo visto 34 KB). Em teste direto para a AWS o nó teve
+reconexões, `publish failed` e perdas de janelas de onda (~30%) e um reinício por watchdog: **para coletar sessões use o broker local**
+(`MQTT_USE_TLS 0`). `rc=5` em `[mqtt] failed` é senha errada; `rc=-2` é falha de conexão/TLS.
+
+**Não abra a porta serial durante a coleta:** abrir reinicia a placa (DTR/RTS).
+
 ## Dados publicados
 
 ### `zenith/readings/<mac-do-sensor>` (JSON, ~5 por segundo)

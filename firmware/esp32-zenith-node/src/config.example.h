@@ -20,8 +20,17 @@ static const WifiCredential WIFI_NETWORKS[] = {
 #define WIFI_TRY_TIMEOUT_MS 8000
 
 // ---- MQTT ----
+// 1 = MQTT sobre TLS (broker na AWS, porta 8883, certificado Let's Encrypt validado com src/root_ca.h, hora via NTP).
+// 0 = MQTT em claro na LAN (Mosquitto local, porta 1883). Com TLS o host precisa ser o nome do certificado
+// (<ip-com-hifens>.sslip.io), nunca o IP cru.
+#define MQTT_USE_TLS 0
+#if MQTT_USE_TLS
+#define MQTT_HOST "x-x-x-x.sslip.io"
+#define MQTT_PORT 8883
+#else
 #define MQTT_HOST "192.168.1.10"
 #define MQTT_PORT 1883
+#endif
 // Leave empty for an anonymous broker.
 #define MQTT_USER ""
 #define MQTT_PASSWORD ""
@@ -90,11 +99,21 @@ static const char *const SENSOR_ADDRESSES[] = {
 // the old 1000ms cadence; keeping it at 60 now would only cover ~12s).
 #define READING_BUFFER_CAPACITY 300
 
-// ---- Sensor output rate (optional, experimental -- NOT bench-tested) ----
-// The WTVB01-BT50's RATE register (0x03) defaults to 0x06 (10Hz) and can
-// be raised up to 0x0A (200Hz) -- this is documented for the general
-// WitMotion WT/BWT protocol family, not verified against a capture from
-// this specific sensor. This firmware normally never writes to the
+// ---- Sensor output rate (optional, experimental) ----
+// MEASURED on the unit E6:6B:9A:CC:88:25 (6 Oct 2026, frames over MQTT):
+//   0x09 = 100.00 Hz (what this unit runs at; reference, 100% of frames)
+//   0x0A = 125.00 Hz (works, 100% of frames, same memory) -- NOT 200 Hz as the
+//          V260410 manual says: this unit follows the old app's code table
+//   0x0B = no usable stream with this firmware (the sensor went back to the
+//          Default data mode and no waveform window ever closed)
+//   0x08 would be 50 Hz.
+// 8 Oct 2026: the project now trains and analyses at 125 Hz (SENSOR_CONFIGURE_RATE 1, SENSOR_RATE_CODE 0x0A). At 100 Hz the motor's
+// 2x line-frequency vibration (120 Hz) folds to ~20 Hz, inside the analysed band, and inflates the velocity; at 125 Hz it folds to ~4 Hz,
+// outside it. Every session of one training must use the same rate.
+// The write is saved in the sensor's memory and persists, so enable it only to
+// flash once and turn it off again (it also rewrites on every reconnect).
+// The WTVB01-BT50's RATE register (0x03) defaults to 0x06 (10Hz). The table
+// below was documented for the general WitMotion WT/BWT protocol family. This firmware normally never writes to the
 // sensor at all (see README's "por que é simples") -- this is the one
 // optional exception, off by default. The write-command format itself
 // (unlock/write/save via 0xFF 0xAA framing) IS confirmed from the
