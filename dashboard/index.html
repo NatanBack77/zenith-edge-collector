@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<title>Zenith Edge Dashboard</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #1a1d24;
+    --border: #2a2e37;
+    --text: #e6e8eb;
+    --muted: #8a8f98;
+    --accent: #4dabf7;
+    --ok: #2ecc71;
+    --off: #e74c3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  h1 { font-size: 20px; margin: 0; }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--off);
+  }
+  .dot.on { background: var(--ok); }
+
+  .sensors {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card h2 {
+    font-size: 15px;
+    margin: 0 0 12px 0;
+    color: var(--accent);
+    font-family: monospace;
+  }
+  .charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+  }
+  .chart-box {
+    background: #12141a;
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .chart-box .title {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .chart-box canvas { max-height: 180px; }
+
+  .device-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: 14px;
+  }
+  .updated { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .empty { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Zenith Edge Dashboard</h1>
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">conectando...</span>
+  </div>
+</header>
+
+<div class="sensors" id="sensors">
+  <p class="empty">Aguardando leituras...</p>
+</div>
+
+<script>
+const BROKER_URL = "wss://test.mosquitto.org:8081/mqtt";
+const TOPIC_READINGS = "zenith/readings/#";
+const TOPIC_STATUS = "zenith/status";
+const MAX_POINTS = 40;
+
+const AXIS_COLORS = { x: "#4dabf7", y: "#f7c94d", z: "#f74d7c" };
+
+const dot = document.getElementById("dot");
+const statusText = document.getElementById("statusText");
+const sensorsEl = document.getElementById("sensors");
+const sensors = {}; // mac -> { el, charts: {velocity, displacement, angle, frequency}, tempEl, powerEl, rssiEl, updatedEl }
+
+const client = mqtt.connect(BROKER_URL);
+
+client.on("connect", () => {
+  dot.classList.add("on");
+  statusText.textContent = "conectado a " + BROKER_URL;
+  client.subscribe(TOPIC_READINGS);
+  client.subscribe(TOPIC_STATUS);
+});
+
+client.on("reconnect", () => {
+  dot.classList.remove("on");
+  statusText.textContent = "reconectando...";
+});
+
+client.on("close", () => {
+  dot.classList.remove("on");
+  statusText.textContent = "desconectado";
+});
+
+client.on("message", (topic, payload) => {
+  if (topic === TOPIC_STATUS) return;
+
+  let data;
+  try {
+    data = JSON.parse(payload.toString());
+  } catch {
+    return;
+  }
+
+  if (!sensors[data.sensor]) {
+    sensors[data.sensor] = createSensorCard(data.sensor);
+  }
+  updateSensor(sensors[data.sensor], data);
+});
+
+function makeLineChart(canvas, unit) {
+  return new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: [],
+      datasets: ["x", "y", "z"].map(axis => ({
+        label: axis.toUpperCase(),
+        data: [],
+        borderColor: AXIS_COLORS[axis],
+        backgroundColor: AXIS_COLORS[axis],
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.25,
+      })),
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      scales: {
+        x: { display: false },
+        y: {
+          ticks: { color: "#8a8f98", font: { size: 10 } },
+          grid: { color: "#2a2e37" },
+          title: { display: true, text: unit, color: "#8a8f98", font: { size: 10 } },
+        },
+      },
+      plugins: {
+        legend: { labels: { color: "#e6e8eb", boxWidth: 12, font: { size: 11 } } },
+      },
+    },
+  });
+}
+
+function createSensorCard(mac) {
+  const emptyMsg = sensorsEl.querySelector(".empty");
+  if (emptyMsg) emptyMsg.remove();
+
+  const el = document.createElement("div");
+  el.className = "card";
+  el.innerHTML = `
+    <h2>${mac}</h2>
+    <div class="charts">
+      <div class="chart-box"><div class="title">Velocidade</div><canvas></canvas></div>
+      <div class="chart-box"><div class="title">Deslocamento</div><canvas></canvas></div>
+      <div class="chart-box"><div class="title">Ângulo</div><canvas></canvas></div>
+      <div class="chart-box"><div class="title">Frequência</div><canvas></canvas></div>
+    </div>
+    <div class="device-info">
+      <span>temp: <span class="temp">-</span>°C</span>
+      <span>power_raw: <span class="power">-</span></span>
+      <span>rssi: <span class="rssi">-</span> dBm</span>
+    </div>
+    <div class="updated"></div>
+  `;
+  sensorsEl.appendChild(el);
+
+  const canvases = el.querySelectorAll("canvas");
+  return {
+    el,
+    charts: {
+      velocity: makeLineChart(canvases[0], "mm/s"),
+      displacement: makeLineChart(canvases[1], "µm"),
+      angle: makeLineChart(canvases[2], "graus"),
+      frequency: makeLineChart(canvases[3], "Hz"),
+    },
+    tempEl: el.querySelector(".temp"),
+    powerEl: el.querySelector(".power"),
+    rssiEl: el.querySelector(".rssi"),
+    updatedEl: el.querySelector(".updated"),
+  };
+}
+
+function pushPoint(chart, label, obj) {
+  chart.data.labels.push(label);
+  chart.data.datasets[0].data.push(obj.x);
+  chart.data.datasets[1].data.push(obj.y);
+  chart.data.datasets[2].data.push(obj.z);
+
+  if (chart.data.labels.length > MAX_POINTS) {
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(ds => ds.data.shift());
+  }
+  chart.update("none");
+}
+
+function updateSensor(s, d) {
+  const label = new Date().toLocaleTimeString();
+  pushPoint(s.charts.velocity, label, d.velocity);
+  pushPoint(s.charts.displacement, label, d.displacement);
+  pushPoint(s.charts.angle, label, d.angle);
+  pushPoint(s.charts.frequency, label, d.frequency);
+
+  s.tempEl.textContent = d.device.temperature.toFixed(1);
+  s.powerEl.textContent = d.device.power_raw;
+  s.rssiEl.textContent = d.device.rssi;
+  s.updatedEl.textContent = `uptime: ${(d.uptime_ms / 1000).toFixed(0)}s · atualizado ${label}`;
+}
+</script>
+
+</body>
+</html>
